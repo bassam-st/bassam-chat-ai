@@ -140,7 +140,7 @@ ul{list-style:none;margin:0;padding:0}.thread{padding:8px;border-radius:10px;cur
 .thread.active{border-color:#7c3aed;background:#151b2b}
 .msg{white-space:pre-wrap;line-height:1.7;margin:8px 0;padding:10px;border-radius:10px}.user{background:#0f1421}
 .assistant{background:#0f1220;border:1px solid #2a2f45}.row{display:flex;gap:8px;flex-wrap:wrap;margin-top:8px}
-.footer{color:var(--muted);text-align:center;margin-top:18px}.install{position:fixed;right:12px;bottom:12px;background:#7c3aed;border:none;color:#fff;border-radius:12px;padding:10px 14px;font-weight:700}
+.footer{color:#98a2b3;text-align:center;margin-top:18px}.install{position:fixed;right:12px;bottom:12px;background:#7c3aed;border:none;color:#fff;border-radius:12px;padding:10px 14px;font-weight:700}
 .ts{opacity:.75;font-size:12px;display:block;margin-bottom:4px}
 </style></head><body>
 <div class="wrap">
@@ -175,6 +175,29 @@ async function sendMsg(){const text=q.value.trim();if(!text)return false;addMsg(
 es.onmessage=(e)=>{const d=JSON.parse(e.data);if(d.chunk){buf+=d.chunk;holder.childNodes[1].nodeValue="\\n"+buf;chat.scrollTop=chat.scrollHeight;}if(d.done){es.close();}};es.onerror=()=>{es.close();};return false;}
 </script></body></html>""")
 
+# ===== صياغة بشرية للجواب =====
+def compose_answer_ar(q: str, bullets: List[str], results: List[Dict]) -> str:
+    """
+    صياغة بشرية سريعة من الملخص + أهم الروابط.
+    """
+    intro = "تمام! هذا جواب مختصر بصياغة طبيعية ثم نقاط سريعة:"
+    if bullets:
+        lead = " ".join(bullets[:2]) if len(bullets) >= 2 else bullets[0]
+        paragraph = f"{intro}\n{lead}"
+    else:
+        paragraph = f"{intro}\nبحثت سريعًا لكن المعلومات قليلة، هذه روابط قد تفيد."
+
+    points = ""
+    if bullets:
+        points = "\n\nملخص سريع:\n" + "\n".join(f"• {b}" for b in bullets[:8])
+
+    sources = ""
+    if results:
+        sources = "\n\nأهم الروابط:\n" + "\n".join(f"- {r['title']}: {r['link']}" for r in results[:6])
+
+    closing = "\n\nلمتابعة نقطة محددة، اكتب: (عن النقطة …) أو اقتبس سطرًا. وللبدء من جديد: (➕ محادثة جديدة)."
+    return paragraph + points + sources + closing
+
 # ===== صفحات =====
 @app.get("/", response_class=HTMLResponse)
 def home(request: Request, t: Optional[int]=None):
@@ -193,27 +216,35 @@ def rename_thread(tid: int = Form(...), title: str = Form(...)):
     with db() as con: con.execute("UPDATE threads SET title=? WHERE id=?", (title.strip() or "محادثة", tid))
     return RedirectResponse(url=f"/?t={tid}", status_code=303)
 
-# ===== API: رد فوري مع وعي متابعة =====
+# ===== API: رد فوري مع وعي متابعة (نسخة منقّحة) =====
 @app.get("/api/ask_sse")
 def ask_sse(request: Request, q: str, tid: int):
     q = (q or "").strip()
     if not q:
-        def gen_err(): yield "data: " + json.dumps({"chunk":"⚠️ الرجاء كتابة سؤالك أولًا."}) + "\n\n"
+        def gen_err(): 
+            yield "data: " + json.dumps({"chunk":"⚠️ الرجاء كتابة سؤالك أولًا."}) + "\n\n"
         return StreamingResponse(gen_err(), media_type="text/event-stream")
-    nq = normalize_ar(q); add_msg(tid,"user",f"[{now_iso()}] {q}")
+
+    # نخزّن النص بدون طابع زمني داخله (الوقت موجود في عمود ts)
+    add_msg(tid,"user", q)
+    nq = normalize_ar(q)
 
     def streamer():
         quick = id_or_privacy_reply(nq)
         if quick:
-            add_msg(tid,"assistant",f"[{now_iso()}] {quick}")
-            yield "data: " + json.dumps({"chunk":quick,"done":True}) + "\n\n"; return
+            add_msg(tid,"assistant", quick)
+            yield "data: " + json.dumps({"chunk":quick,"done":True}) + "\n\n"; 
+            return
 
         contextual_q = contextualize_query(tid,q)
-        try: resA = ddg_search(contextual_q, 8)
-        except Exception: resA = []
+        try: 
+            resA = ddg_search(contextual_q, 8)
+        except Exception: 
+            resA = []
         bulletsA = bullets_from_snips([r["snippet"] for r in resA], 8)
-        needB = len(bulletsA) < 2
-        if needB:
+
+        results, bullets = resA, bulletsA
+        if len(bullets) < 2:
             keys = extract_keywords(last_texts(tid,8)+[q], top=12)
             subq = [f"{q} {k}" for k in keys[:6]] + [q+" شرح مبسط", q+" تعريف"]
             resB=[]; 
@@ -222,24 +253,19 @@ def ask_sse(request: Request, q: str, tid: int):
                 except Exception: pass
             results = merge_results(resA, resB, 12)
             bullets = bullets_from_snips([r["snippet"] for r in results], 8) or bulletsA
-        else:
-            results, bullets = resA, bulletsA
 
-        opening = f"[{now_iso()}] تمام! هذا ملخص حسب سياق محادثتنا:\n"
-        yield "data: " + json.dumps({"chunk":opening}) + "\n\n"; time.sleep(0.03)
-        if bullets:
-            for b in bullets:
-                yield "data: " + json.dumps({"chunk":"• "+b+"\n"}) + "\n\n"; time.sleep(0.02)
-        else:
-            yield "data: " + json.dumps({"chunk":"لم أجد نقاطًا كافية؛ إليك روابط مفيدة.\n"}) + "\n\n"
-        if results:
-            yield "data: " + json.dumps({"chunk":"\nأهم الروابط:\n"}) + "\n\n"
-            for r in results[:6]:
-                yield "data: " + json.dumps({"chunk":f"- {r['title']}: {r['link']}\n"}) + "\n\n"; time.sleep(0.02)
-        closing = f"\n[{now_iso()}] لمتابعة نقطة محددة، اكتب: (عن النقطة …) أو اقتبس سطرًا. وللبدء من جديد: (➕ محادثة جديدة)."
-        yield "data: " + json.dumps({"chunk":closing,"done":True}) + "\n\n"
-        final = opening + "".join("• "+b+"\n" for b in bullets) + ("\nأهم الروابط:\n" + "\n".join(f"- {r['title']}: {r['link']}" for r in results[:6]) if results else "") + closing
-        add_msg(tid,"assistant",final)
+        final_text = compose_answer_ar(q, bullets, results)
+
+        # بثّ تدريجي جميل
+        para, rest = final_text.split("\n\n", 1) if "\n\n" in final_text else (final_text, "")
+        yield "data: " + json.dumps({"chunk": para + "\n"}) + "\n\n"; time.sleep(0.03)
+        if rest:
+            for line in rest.split("\n"):
+                if line.strip():
+                    yield "data: " + json.dumps({"chunk": line + "\n"}) + "\n\n"; time.sleep(0.02)
+
+        yield "data: " + json.dumps({"done": True}) + "\n\n"
+        add_msg(tid,"assistant", final_text)
 
     return StreamingResponse(streamer(), media_type="text/event-stream")
 
