@@ -11,7 +11,7 @@ from fastapi.templating import Jinja2Templates
 import httpx
 from duckduckgo_search import DDGS
 
-# ───────── مسارات أساسية
+# ───────── المسارات الأساسية
 BASE = os.path.dirname(os.path.abspath(__file__))
 DATA = os.path.join(BASE, "data"); os.makedirs(DATA, exist_ok=True)
 DB_PATH = os.path.join(DATA, "chat.db")
@@ -96,7 +96,7 @@ def condense_context(tid:int, n:int=8)->str:
 def contextualize_query(tid:int, q:str)->str:
     return f"{q} — [متابعة: {condense_context(tid)}]" if is_followup(q) else q
 
-# ───────── بحث ويب موثوق (DDG + Instant Answer + ويكيبيديا عربي→إنجليزي)
+# ───────── بحث ويب (DuckDuckGo + Wikipedia)
 def _clean(s:str)->str: return re.sub(r"[^\w\s\u0600-\u06FF]", " ", (s or "").strip())
 
 def bullets_from_snips(snips:List[str], m:int=8)->List[str]:
@@ -125,11 +125,10 @@ def merge_results(a:List[Dict], b:List[Dict], limit:int=10)->List[Dict]:
 
 def ddg_search_text(q:str, k:int=8)->List[Dict]:
     out=[]
-    regions_try = ["xa-ar", "wt-wt", "us-en"]
-    for reg in regions_try:
+    for reg in ["xa-ar", "wt-wt", "us-en"]:
         try:
             with DDGS() as ddgs:
-                for r in ddgs.text(q, region=reg, safesearch="moderate", max_results=k, backend="duckduckgo"):
+                for r in ddgs.text(q, region=reg, safesearch="moderate", max_results=k):
                     out.append({"title":r.get("title",""),"link":r.get("href") or r.get("url") or "","snippet":r.get("body","")})
                     if len(out)>=k: break
         except Exception:
@@ -137,29 +136,7 @@ def ddg_search_text(q:str, k:int=8)->List[Dict]:
         if out: break
     return out
 
-async def ddg_instant_answer(q:str, k:int=6)->List[Dict]:
-    url=f"https://api.duckduckgo.com/?q={urllib.parse.quote(q)}&format=json&no_html=1&skip_disambig=1"
-    try:
-        async with httpx.AsyncClient(timeout=12) as cl:
-            r = await cl.get(url); data = r.json()
-    except Exception:
-        return []
-    out=[]
-    abs_txt = (data.get("AbstractText") or "").strip()
-    if abs_txt:
-        out.append({"title": data.get("Heading") or "ملخص",
-                    "link": data.get("AbstractURL") or "",
-                    "snippet": abs_txt})
-    for t in (data.get("RelatedTopics") or []):
-        if isinstance(t, dict):
-            txt = (t.get("Text") or "").strip(); href = (t.get("FirstURL") or "").strip()
-            if txt:
-                out.append({"title": txt[:60], "link": href, "snippet": txt})
-                if len(out)>=k: break
-    return out
-
 async def wiki_summary(title:str, lang:str="ar")->Optional[Dict]:
-    # يلخص من ويكيبيديا (عربي ثم إنجليزي)
     safe = urllib.parse.quote(title.replace(" ","_"))
     url = f"https://{lang}.wikipedia.org/api/rest_v1/page/summary/{safe}"
     try:
@@ -175,252 +152,102 @@ async def wiki_summary(title:str, lang:str="ar")->Optional[Dict]:
         return None
     return None
 
-def rough_en(q: str) -> str:
-    rep = {
-        "اين": "where", "أين": "where", "تقع": "is", "اليمن": "Yemen",
-        "ماهو": "what is", "ما هو": "what is", "من هو": "who is", "اخبار": "news"
-    }
-    s = q
-    for ar,en in rep.items(): s = s.replace(ar, en)
-    return s
-
 async def smart_search(q:str, k:int=10)->Dict:
-    # 1) DDG نصي
     resA = ddg_search_text(q, k)
-    # 2) DDG Instant Answer
-    resB = await ddg_instant_answer(q, k)
-    merged = merge_results(resA, resB, k)
+    ar_sum = await wiki_summary(q, "ar")
+    if ar_sum: resA = merge_results([ar_sum], resA, k)
+    bullets = bullets_from_snips([r.get("snippet") for r in resA], 8)
+    return {"results": resA, "bullets": bullets}
 
-    # 3) ويكيبيديا عربي لمحاولة استخراج وصف عربي واضح
-    if merged:
-        top_title = merged[0].get("title","").split(" — ")[0].split(" - ")[0][:60]
-        if top_title:
-            ar_sum = await wiki_summary(top_title, "ar")
-            if ar_sum: merged = merge_results([ar_sum], merged, k)
-
-    # 4) لو النتائج قليلة جدًا جرّب الإنجليزية
-    if len(merged) < max(2, k//3):
-        q_en = rough_en(q)
-        resA_en = ddg_search_text(q_en, k)
-        resB_en = await ddg_instant_answer(q_en, k)
-        merged = merge_results(merged, merge_results(resA_en, resB_en, k), k)
-
-        # ويكيبيديا إنجليزي احتياط
-        if merged:
-            top_title = merged[0].get("title","").split(" — ")[0].split(" - ")[0][:60]
-            en_sum = await wiki_summary(top_title, "en")
-            if en_sum: merged = merge_results([en_sum], merged, k)
-
-    bullets = bullets_from_snips([r.get("snippet") for r in merged], 8)
-    return {"results": merged, "bullets": bullets}
-
-# ───────── ردود خاصة بالهوية/الخصوصية
+# ───────── ردود الهوية/الخصوصية
 def id_or_privacy_reply(nq:str)->Optional[str]:
-    if ("من هو بسام" in nq) or ("من هو بسام الذكي" in nq) or ("من هو بسام الشتيمي" in nq) \
-       or ("من صنع التطبيق" in nq) or ("من المطور" in nq) or ("من هو صاحب التطبيق" in nq):
-        return "بسام الشتيمي هو منصوريّ الأصل، وهو صانع هذا التطبيق."
-    if ("اسم ام بسام" in nq) or ("اسم ام بسام الشتيمي" in nq) or ("اسم زوجة بسام" in nq) or ("مرت بسام" in nq):
-        return "حرصًا على الخصوصية، لا يقدّم بسام معلومات شخصية مثل أسماء أفراد العائلة. رجاءً تجنّب مشاركة بيانات حساسة."
+    if "من هو بسام" in nq or "المطور" in nq:
+        return "بسام الشتيمي هو مطور هذا النظام الذكي."
     return None
 
-# ───────── صفحة HTML افتراضية تُولّد تلقائيًا
+# ───────── واجهة HTML تلقائية
 INDEX = os.path.join(TEMPLATES_DIR, "index.html")
 if not os.path.exists(INDEX):
     with open(INDEX, "w", encoding="utf-8") as f:
         f.write("""<!doctype html><html lang="ar" dir="rtl"><head>
 <meta charset="utf-8"/><meta name="viewport" content="width=device-width,initial-scale=1"/>
-<title>تشات بسام — محادثة ووعي متابعة</title>
+<title>تشات بسام</title>
 <link rel="manifest" href="/static/pwa/manifest.json"/><meta name="theme-color" content="#7c3aed"/>
 <style>
-:root{--bg:#0b0f19;--card:#121826;--muted:#98a2b3;--pri:#7c3aed}
-*{box-sizing:border-box}body{margin:0;background:var(--bg);color:#e5e7eb;font-family:system-ui,Segoe UI,Roboto,"Noto Naskh Arabic UI","Noto Kufi Arabic",Tahoma,Arial,sans-serif}
-.wrap{max-width:980px;margin:0 auto;padding:14px}
-.card{background:#121826;border-radius:14px;padding:12px;border:1px solid #1f2937;box-shadow:0 10px 30px rgba(0,0,0,.25);margin:12px 0}
-h1{font-size:18px;margin:8px 0}
+body{background:#0b0f19;color:#e5e7eb;font-family:system-ui,Segoe UI,Roboto,"Noto Naskh Arabic UI";}
+.card{background:#121826;border-radius:14px;padding:12px;border:1px solid #1f2937;margin:12px auto;max-width:900px;}
 .msg{white-space:pre-wrap;line-height:1.7;margin:8px 0;padding:10px;border-radius:10px}
 .user{background:#0f1421}.assistant{background:#0f1220;border:1px solid #2a2f45}
 .ts{opacity:.75;font-size:12px;display:block;margin-bottom:4px}
-.row{display:flex;gap:8px;flex-wrap:wrap;margin-top:8px}
-input[type=text]{flex:1;min-width:220px;padding:12px 14px;border:none;border-radius:12px;background:#0f1421;color:#fff}
-button{padding:12px 16px;border:none;border-radius:12px;background:var(--pri);color:#fff;font-weight:700;cursor:pointer}
-button:hover{opacity:.92}
-.install{position:fixed;right:12px;bottom:12px;background:#7c3aed;color:#fff;border:none;border-radius:12px;padding:10px 14px;font-weight:700}
-.footer{color:var(--muted);text-align:center;margin-top:18px}
+input{width:80%;padding:10px;border:none;border-radius:10px;background:#0f1421;color:#fff}
+button{padding:10px 16px;background:#7c3aed;color:#fff;border:none;border-radius:10px;font-weight:700}
 </style></head><body>
-<div class="wrap">
-  <h1>تشات بسام — محادثة ووعي متابعة</h1>
-  <div id="chat" class="card"></div>
-  <form class="card row" onsubmit="return sendMsg()">
-    <input id="q" type="text" placeholder="اكتب سؤالك..." required />
-    <button type="submit">أرسل</button>
-  </form>
-  <div class="footer">© Bassam 2025 — يرد دائمًا بالعربية ويعرض أهم الروابط.</div>
-</div>
+<div class="card" id="chat"></div>
+<form class="card" onsubmit="return sendMsg()">
+<input id="q" placeholder="اكتب سؤالك..." required/>
+<button>إرسال</button></form>
 <script>
-// زر تثبيت PWA يظهر تلقائيًا من الحدث
-let deferredPrompt=null;window.addEventListener("beforeinstallprompt",(e)=>{e.preventDefault();deferredPrompt=e;
-  const b=document.createElement("button");b.className="install";b.textContent="📱 تثبيت تشات بسام";
-  b.onclick=async()=>{b.style.display="none";deferredPrompt.prompt();await deferredPrompt.userChoice;deferredPrompt=null;};
-  document.body.appendChild(b);
-});
-// Service Worker
-if("serviceWorker" in navigator){navigator.serviceWorker.register("/sw.js").catch(()=>{});}
+function addMsg(txt,who){const c=document.getElementById('chat');const d=document.createElement('div');d.className='msg '+who;
+const t=document.createElement('span');t.className='ts';t.textContent=new Date().toISOString();d.appendChild(t);
+d.appendChild(document.createTextNode("\\n"+txt));c.appendChild(d);c.scrollTop=c.scrollHeight;}
+addMsg("👋 مرحبًا! أنا تشات بسام — اسألني أي شيء.","assistant");
+async function sendMsg(){const i=document.getElementById('q');const v=i.value.trim();if(!v)return false;addMsg(v,"user");i.value='';
+const es=new EventSource(`/api/ask_sse?q=${encodeURIComponent(v)}&tid=0`);let buf='';const h=document.createElement('div');
+h.className='msg assistant';const ts=document.createElement('span');ts.className='ts';ts.textContent=new Date().toISOString();
+h.appendChild(ts);const tn=document.createTextNode('...');h.appendChild(tn);document.getElementById('chat').appendChild(h);
+es.onmessage=(e)=>{const d=JSON.parse(e.data);if(d.chunk){buf+=d.chunk;h.childNodes[1].nodeValue="\\n"+buf;}if(d.done){es.close();}};es.onerror=()=>es.close();return false;}
+</script></body></html>""")
 
-function addMsg(txt, who){
-  const chat=document.getElementById('chat');
-  const d=document.createElement('div'); d.className='msg '+(who||'assistant');
-  const ts=document.createElement('span'); ts.className='ts'; ts.textContent=new Date().toISOString();
-  d.appendChild(ts); d.appendChild(document.createTextNode("\\n"+txt)); chat.appendChild(d); chat.scrollTop=chat.scrollHeight;
-}
-
-addMsg("مرحبًا! أنا تشات بسام — اسألني أي شيء وسأجيبك بالعربية مع أهم الروابط 👌","assistant");
-
-async function sendMsg(){
-  const inp=document.getElementById('q'); const text=inp.value.trim(); if(!text)return false;
-  addMsg(text,"user"); inp.value='';
-  try{
-    const es=new EventSource(`/api/ask_sse?q=${encodeURIComponent(text)}&tid=0`);
-    let buf=''; const holder=document.createElement('div'); holder.className='msg assistant';
-    const ts=document.createElement('span'); ts.className='ts'; ts.textContent=new Date().toISOString();
-    holder.appendChild(ts); const tn=document.createTextNode('...'); holder.appendChild(tn);
-    const chat=document.getElementById('chat'); chat.appendChild(holder);
-
-    es.onmessage=(e)=>{const d=JSON.parse(e.data); if(d.chunk){buf+=d.chunk; holder.childNodes[1].nodeValue="\\n"+buf; chat.scrollTop=chat.scrollHeight;} if(d.done){es.close();}};
-    es.onerror=()=>{es.close(); fallback(text);};
-  }catch(_){ fallback(text); }
-  return false;
-}
-
-async function fallback(text){
-  try{
-    const r=await fetch('/api/ask',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({q:text, tid:0})});
-    const j=await r.json(); addMsg(j.answer || 'لم أستطع الحصول على نتيجة الآن.', 'assistant');
-  }catch(_){ addMsg('تعذر الاتصال بالخادم الآن.', 'assistant'); }
-}
-</script>
-</body></html>""")
-
-# ───────── صفحات أساسية
-@app.get("/", response_class=HTMLResponse)
-def home(request: Request):
-    # خيط واحد افتراضي في الواجهة المبسطة
-    threads = list_threads()
-    tid = threads[0]["id"] if threads else new_thread()
-    msgs = get_messages(tid)
-    return templates.TemplateResponse("index.html", {"request":request})
-
-# ───────── API: SSE مع Heartbeat وإخراج عربي
+# ───────── الرد الفوري SSE
 @app.get("/api/ask_sse")
 async def ask_sse(request: Request, q: str, tid: int=0):
-    # اجعل tid=0 دائمًا خيطًا واحدًا بسيطًا
     if tid == 0:
         threads = list_threads()
         tid = threads[0]["id"] if threads else new_thread()
-
     q = (q or "").strip()
-    if not q:
-        async def gen_err():
-            yield "data: " + json.dumps({"chunk":"⚠️ الرجاء كتابة سؤالك أولًا."}) + "\n\n"
-        return StreamingResponse(gen_err(), media_type="text/event-stream")
-
     nq = normalize_ar(q)
     add_msg(tid,"user",f"[{now_iso()}] {q}")
 
     async def streamer():
-        last_ping = time.time()
-
-        # ردود خاصة
         quick = id_or_privacy_reply(nq)
         if quick:
-            ans = quick
-            add_msg(tid,"assistant",f"[{now_iso()}] {ans}")
-            yield "data: " + json.dumps({"chunk":ans,"done":True}) + "\n\n"
-            return
+            yield f"data: {json.dumps({'chunk':quick,'done':True})}\n\n"; return
 
         contextual_q = contextualize_query(tid, q)
         data = await smart_search(contextual_q, 10)
         results, bullets = data["results"], data["bullets"]
 
-        # إخراج عربي حتى لو النصوص إنجليزية
-        opening = f"[{now_iso()}] هذا ملخص واضح بالعربية لما وجدته:\n"
-        yield "data: " + json.dumps({"chunk":opening}) + "\n\n"; await asyncio.sleep(0.02)
+        opening = f"[{now_iso()}] هذا ملخص بالعربية:\n"
+        yield f"data: {json.dumps({'chunk':opening})}\n\n"; await asyncio.sleep(0.02)
 
         if bullets:
             for b in bullets:
-                # إن وُجدت جملة إنجليزية خالصة، نوّضح للمستخدم
                 if re.search(r"[A-Za-z]{6,}", b):
                     b = "معلومة بالإنجليزية: " + b
-                yield "data: " + json.dumps({"chunk":"• "+b+"\n"}) + "\n\n"; await asyncio.sleep(0.01)
+                yield f"data: {json.dumps({'chunk':'• '+b+'\\n'})}\n\n"; await asyncio.sleep(0.01)
         else:
-            yield "data: " + json.dumps({"chunk":"لم أعثر على نقاط كافية، ولكن هذه روابط موثوقة:\n"}) + "\n\n"
+            yield f"data: {json.dumps({'chunk':'لم أجد تفاصيل كافية، هذه روابط قد تفيد:'})}\n\n"
 
         if results:
-            yield "data: " + json.dumps({"chunk":"\nأهم الروابط:\n"}) + "\n\n"
+            yield f"data: {json.dumps({'chunk':'\\nأهم الروابط:\\n'})}\n\n"
             for r in results[:6]:
-                title = r.get('title',''); link = r.get('link','')
-                yield "data: " + json.dumps({"chunk":f"- {title}: {link}\n"}) + "\n\n"; await asyncio.sleep(0.01)
+                yield f"data: {json.dumps({'chunk':f'- {r.get(\"title\",\"")}: {r.get(\"link\",\"\")}\\n'})}\n\n"; await asyncio.sleep(0.01)
 
-        closing = f"\n[{now_iso()}] لو أردت متابعة نقطة محددة، اكتب: (عن النقطة …) أو اقتبس سطرًا من الملخص."
-        full = opening + "".join("• "+b+"\n" for b in bullets) + \
-               ("\nأهم الروابط:\n" + "\n".join(f"- {r.get('title','')}: {r.get('link','')}" for r in results[:6]) if results else "") + closing
-        add_msg(tid,"assistant",full)
-
-        yield "data: " + json.dumps({"chunk":closing,"done":True}) + "\n\n"
-
-        # Heartbeat احتياطي إن ظل الاتصال مفتوحًا
-        while not await request.is_disconnected():
-            if time.time() - last_ping > 15:
-                yield ": ping\n\n"; last_ping = time.time()
-            await asyncio.sleep(5)
+        closing = f"\\n[{now_iso()}] يمكنك متابعة نقطة محددة بقولك (عن النقطة ...)."
+        yield f"data: {json.dumps({'chunk':closing,'done':True})}\n\n"
 
     return StreamingResponse(streamer(), media_type="text/event-stream")
-
-# ───────── Fallback غير متدفق
-@app.post("/api/ask")
-async def ask_json(request: Request):
-    data = await request.json()
-    q = (data.get("q") or "").strip()
-    tid = int(data.get("tid") or 0)
-    if tid == 0:
-        threads = list_threads()
-        tid = threads[0]["id"] if threads else new_thread()
-
-    nq = normalize_ar(q)
-    add_msg(tid,"user",f"[{now_iso()}] {q}")
-
-    quick = id_or_privacy_reply(nq)
-    if quick:
-        add_msg(tid,"assistant",f"[{now_iso()}] {quick}")
-        return {"ok": True, "answer": quick}
-
-    contextual_q = contextualize_query(tid, q)
-    dd = await smart_search(contextual_q, 10)
-    bullets, results = dd["bullets"], dd["results"]
-
-    if not bullets and not results:
-        ans = "حاولتُ البحث الآن لكن يبدو أنّ النتائج قليلة. جرّب إعادة الصياغة أو حدد النقطة أكثر وسأحاول ثانية."
-    else:
-        ans = "هذا ملخص عربي موجز:\n" + "".join("• "+(("معلومة بالإنجليزية: "+b) if re.search(r\"[A-Za-z]{6,}\", b) else b) + "\n" for b in bullets[:6])
-        if results:
-            ans += "\nأهم الروابط:\n" + "\n".join(f"- {r.get('title','')}: {r.get('link','')}" for r in results[:6])
-
-    add_msg(tid,"assistant",ans)
-    return {"ok": True, "answer": ans}
 
 # ───────── PWA
 @app.get("/sw.js")
 def sw_js():
-    return HTMLResponse(
-        "self.addEventListener('install',e=>self.skipWaiting());"
-        "self.addEventListener('activate',e=>self.clients.claim());"
-        "self.addEventListener('fetch',()=>{});",
-        media_type="application/javascript"
-    )
+    return HTMLResponse("self.addEventListener('install',e=>self.skipWaiting());self.addEventListener('activate',e=>self.clients.claim());self.addEventListener('fetch',()=>{});",
+                        media_type="application/javascript")
 
 @app.get("/static/pwa/manifest.json")
 def manifest():
     return JSONResponse({
-        "name":"تشات بسام — محادثة ووعي متابعة",
+        "name":"تشات بسام",
         "short_name":"Bassam Chat",
         "start_url":"/",
         "display":"standalone",
