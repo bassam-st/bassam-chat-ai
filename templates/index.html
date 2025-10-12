@@ -1,1 +1,117 @@
+<!doctype html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width,initial-scale=1"/>
+  <title>بسام — محادثات بخيوط + وعي متابعة</title>
 
+  <meta name="theme-color" content="#7c3aed"/>
+  <link rel="manifest" href="/static/pwa/manifest.json"/>
+  <link rel="apple-touch-icon" href="/static/icons/icon-192.png"/>
+  <link rel="stylesheet" href="/static/style.css"/>
+</head>
+<body>
+<div class="wrap">
+  <div class="header">
+    <h1>بسام — محادثات بخيوط + وعي متابعة</h1>
+    <form action="/thread/new" method="post">
+      <button class="btn" type="submit">➕ محادثة جديدة</button>
+    </form>
+  </div>
+
+  <div class="layout">
+    <!-- قائمة المحادثات -->
+    <aside class="card">
+      <h3>المحادثات</h3>
+      <ul>
+        {% for th in threads %}
+        <li>
+          <a class="thread {% if th.id==cur %}active{% endif %}" href="/?t={{ th.id }}">
+            #{{ th.id }} — {{ th.title or "بدون عنوان" }}
+            <div class="ts">{{ th.created_at }}</div>
+          </a>
+        </li>
+        {% endfor %}
+      </ul>
+      <hr class="hr">
+
+      <form action="/thread/rename" method="post" class="row">
+        <input type="hidden" name="tid" value="{{ cur }}"/>
+        <input type="text" name="title" placeholder="اسم الخيط…"/>
+        <button class="btn" type="submit">حفظ الاسم</button>
+      </form>
+    </aside>
+
+    <!-- مساحة الدردشة -->
+    <main class="card">
+      <div id="chat">
+        {% for m in msgs %}
+          <div class="msg {{ m.role }}">
+            <span class="ts">{{ m.ts }}</span>{{ m.text }}
+          </div>
+        {% endfor %}
+      </div>
+
+      <form class="row" onsubmit="return sendMsg()">
+        <input id="q" type="text" placeholder="اكتب سؤالك هنا…" required/>
+        <button class="btn" type="submit">اسأل</button>
+      </form>
+    </main>
+  </div>
+
+  <div class="footer">© Bassam 2025 — وعي متابعة + بحث مجاني.</div>
+</div>
+
+<!-- زر التثبيت (PWA) + التسجيل للخدمة -->
+<script>
+let deferredPrompt=null;
+window.addEventListener("beforeinstallprompt",(e)=>{
+  e.preventDefault(); deferredPrompt=e;
+  const b=document.createElement("button");
+  b.className="install"; b.textContent="📱 تثبيت";
+  b.onclick=async()=>{ b.style.display="none"; deferredPrompt.prompt(); await deferredPrompt.userChoice; deferredPrompt=null; };
+  document.body.appendChild(b);
+});
+if("serviceWorker" in navigator){ navigator.serviceWorker.register("/sw.js").catch(()=>{}); }
+
+const tid={{ cur|int }};
+const chat=document.getElementById('chat');
+const q=document.getElementById('q');
+
+function addMsg(txt,who){
+  const d=document.createElement('div');
+  d.className='msg '+who;
+  const ts=document.createElement('span');
+  ts.className='ts';
+  ts.textContent=new Date().toISOString();
+  d.appendChild(ts);
+  d.appendChild(document.createTextNode("\n"+txt));
+  chat.appendChild(d);
+  chat.scrollTop=chat.scrollHeight;
+}
+
+async function sendMsg(){
+  const text=q.value.trim(); if(!text) return false;
+  addMsg(text,'user'); q.value='';
+  const url=`/api/ask_sse?q=${encodeURIComponent(text)}&tid=${tid}`;
+  const es=new EventSource(url);
+  let buf='';
+
+  const holder=document.createElement('div');
+  holder.className='msg assistant';
+  const ts=document.createElement('span'); ts.className='ts'; ts.textContent=new Date().toISOString();
+  holder.appendChild(ts);
+  const tn=document.createTextNode('...'); holder.appendChild(tn);
+  chat.appendChild(holder);
+
+  es.onmessage=(e)=>{
+    const d=JSON.parse(e.data);
+    if(d.chunk){ buf+=d.chunk; holder.childNodes[1].nodeValue="\n"+buf; chat.scrollTop=chat.scrollHeight; }
+    if(d.done){ es.close(); }
+  };
+  es.onerror=()=>{ es.close(); };
+  return false;
+}
+</script>
+</body>
+</html>
