@@ -1,9 +1,6 @@
 fastapi
-uvicorn
-jinja2
-duckduckgo_search
+uvicorn[standard]
 httpx
-beautifulsoup4
-readability-lxml
-lxml
+duckduckgo_search>=6.1.1
+jinja2
 python-multipart
