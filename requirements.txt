@@ -1,6 +1,6 @@
 fastapi
 uvicorn[standard]
 jinja2
+openai>=1.40.0
 duckduckgo_search>=6.1.1
 httpx
-python-multipart
