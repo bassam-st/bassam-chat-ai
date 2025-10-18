@@ -1,7 +1,0 @@
-fastapi
-uvicorn
-duckduckgo_search
-httpx
-openai
-google-generativeai
-python-multipart
