@@ -1,0 +1,12 @@
+services:
+  - type: web
+    name: bassam-ai
+    env: python
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT
+    envVars:
+      - key: LLM_BASE_URL
+        # ضع هنا رابط خادم النموذج (OpenAI-compatible). مثال محلي:
+        # value: https://your-llm-server.example.com/v1
+        sync: false
