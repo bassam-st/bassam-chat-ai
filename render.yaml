@@ -6,7 +6,5 @@ services:
     buildCommand: pip install -r requirements.txt
     startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT
     envVars:
-      - key: LLM_BASE_URL
-        # ضع هنا رابط خادم النموذج (OpenAI-compatible). مثال محلي:
-        # value: https://your-llm-server.example.com/v1
+      - key: GEMINI_API_KEY
         sync: false
