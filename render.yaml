@@ -2,7 +2,15 @@ services:
   - type: web
     name: bassam-chat-ai
     env: python
-    buildCommand: pip install -r requirements.txt
-    startCommand: uvicorn main:app --host 0.0.0.0 --port $PORT
     plan: free
-    autoDeploy: true
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn main:app --host 0.0.0.0 --port 10000
+    envVars:
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: CHAT_MODEL
+        value: gemini-1.5-flash
+      - key: EMBED_MODEL
+        value: text-embedding-004
+      - key: DB_PATH
+        value: /tmp/kb.sqlite3
