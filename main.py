@@ -29,7 +29,7 @@ def _use_next_key():
 _use_next_key()
 
 # استخدم أسماء نماذج حديثة ومتوافقة
-CHAT_MODEL = os.getenv("CHAT_MODEL", "gemini-1.5-flash")
+CHAT_MODEL = os.getenv("CHAT_MODEL", "gemini-1.5-pro")
 EMBED_MODEL = os.getenv("EMBED_MODEL", "text-embedding-004")
 DB_PATH     = os.getenv("DB_PATH", "/tmp/bassam_brain.sqlite3")
 
