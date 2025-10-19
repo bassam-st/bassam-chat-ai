@@ -1,11 +1,13 @@
-# main.py — نواة بسام المتكاملة (RAG + بث حي + تعلّم ذاتي + تعلّم من الويب)
+# main.py — نواة بسّام المتكاملة (RAG + بثّ حي + تعلّم ذاتي + تعلّم من الويب)
 # Author: Bassam
+
 import os, json, math, sqlite3, uuid, re, itertools, textwrap
-from typing import List, Tuple
+from typing import List
 from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
 import httpx
+from urllib.parse import quote_plus  # ← إصلاح الاقتباس للبحث
 import google.generativeai as genai
 
 # ============================ الإعداد والمفاتيح ============================
@@ -26,7 +28,8 @@ def _use_next_key():
 
 _use_next_key()
 
-CHAT_MODEL = os.getenv("CHAT_MODEL", "gemini-pro")
+# استخدم أسماء نماذج حديثة ومتوافقة
+CHAT_MODEL = os.getenv("CHAT_MODEL", "gemini-1.5-flash")
 EMBED_MODEL = os.getenv("EMBED_MODEL", "text-embedding-004")
 DB_PATH     = os.getenv("DB_PATH", "/tmp/bassam_brain.sqlite3")
 
@@ -65,7 +68,8 @@ def _with_key_rotation(fn, max_tries=None):
     max_tries = max_tries or len(KEYS)
     last = None
     while tries < max_tries:
-        try: return fn()
+        try:
+            return fn()
         except Exception as e:
             last = e
             if _is_rate_limit(str(e)):
@@ -81,7 +85,8 @@ def embed_text(text: str) -> List[float]:
     def _do():
         return genai.embed_content(model=EMBED_MODEL, content=text)
     emb = _with_key_rotation(_do)
-    return emb.get("embedding") or emb["data"][0]["embedding"]
+    # إرجاع الشكل المناسب حسب نسخة المكتبة
+    return emb.get("embedding") or emb.get("data",[{}])[0].get("embedding", [])
 
 def cosine(a: List[float], b: List[float]) -> float:
     if not a or not b or len(a)!=len(b): return 0.0
@@ -211,6 +216,18 @@ $("#q").addEventListener("keydown",e=>{if(e.key==="Enter")$("#send").click();});
 def home(_: Request):
     return HTMLResponse(PAGE)
 
+# =============== أدوات Debug لمعرفة النماذج المتاحة =================
+@app.get("/_debug/models")
+def debug_models():
+    try:
+        names = []
+        for m in genai.list_models():
+            if "generateContent" in getattr(m, "supported_generation_methods", []):
+                names.append(m.name)
+        return {"ok": True, "models": names[:50]}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
 # ============================ رفع نص للمخزن ============================
 
 @app.post("/upload")
@@ -229,11 +246,10 @@ async def upload(data: dict):
 DDG_URL = "https://duckduckgo.com/html/?q="
 
 def _clean_text(html: str) -> str:
-    # إزالة السكربت/ستايل والوسوم
-    html = re.sub(r"(?is)<(script|style).*?>.*?</\\1>", " ", html)
+    html = re.sub(r"(?is)<(script|style).*?>.*?</\1>", " ", html)
     text = re.sub(r"(?s)<.*?>", " ", html)
-    text = re.sub(r"[ \\t\\xa0]+", " ", text)
-    text = re.sub(r"\\n+", "\\n", text)
+    text = re.sub(r"[ \t\xa0]+", " ", text)
+    text = re.sub(r"\n+", "\n", text)
     return textwrap.shorten(text.strip(), width=4000, placeholder="...")
 
 async def _fetch(url: str) -> str:
@@ -243,13 +259,10 @@ async def _fetch(url: str) -> str:
         return r.text
 
 async def _ddg_links(query: str, n=4) -> List[str]:
-    html = await _fetch(DDG_URL + httpx.utils.quote(query, safe=""))
-    # روابط النتائج (بسيط)
+    html = await _fetch(DDG_URL + quote_plus(query))  # ← هنا الإصلاح
     links = re.findall(r'<a[^>]+class="result__a"[^>]+href="(.*?)"', html)
-    # fall-back للواجهة HTML القديمة
     if not links:
         links = re.findall(r'<a rel="nofollow" class="result__a" href="(.*?)"', html)
-    # فلترة: لا نأخذ duckduckgo نفسه ولا الصور
     links = [u for u in links if "duckduckgo.com" not in u][:n]
     return links
 
@@ -271,7 +284,6 @@ async def web_learn(data: dict):
         q = (data.get("q") or "").strip()
         if not q: return {"error":"أدخل كلمات مفتاحية"}
         added = 0
-        # نأخذ حتى 3–4 روابط لكل كلمة مفتاحية
         topics = [t.strip() for t in q.split(",") if t.strip()]
         for topic in topics:
             links = await _ddg_links(topic, n=3)
@@ -302,7 +314,6 @@ async def chat(payload: dict):
     context, cites = [], []
     if use_search:
         for i,(t,c,_) in enumerate(search_docs(msg),1):
-            # نبقي السياق مختصرًا
             snippet = c[:1200]
             context.append(f"[{i}] {t}: {snippet}")
             cites.append(f"[{i}] {t}")
@@ -327,13 +338,11 @@ async def chat(payload: dict):
                 final.append(t)
                 yield t.encode("utf-8")
             ans = "".join(final).strip()
-            # تعلّم ذاتي: نحفظ سؤال/إجابة كمعلومة
             if learn and ans:
                 add_doc(f"حوار: {msg[:40]}", f"سؤال: {msg}\nإجابة: {ans}")
             if cites:
                 yield f"\n\nالمراجع: {'، '.join(cites)}".encode()
         except Exception as e:
-            # محاولة أخيرة بتبديل المفتاح إن كان Rate Limit
             if _is_rate_limit(str(e)):
                 try:
                     _use_next_key()
