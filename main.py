@@ -1,40 +1,32 @@
-# main.py — نواة بسّام المتكاملة (RAG + بثّ حي + تعلّم ذاتي + تعلّم من الويب)
-# Author: Bassam
-
+# main.py — Bassam Chat AI (RAG + Streaming + Web Learn + Diag)
 import os, json, math, sqlite3, uuid, re, itertools, textwrap
 from typing import List
 from fastapi import FastAPI, Request
-from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
+from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse, PlainTextResponse
 from fastapi.middleware.cors import CORSMiddleware
 import httpx
-from urllib.parse import quote_plus  # ← إصلاح الاقتباس للبحث
 import google.generativeai as genai
 
-# ============================ الإعداد والمفاتيح ============================
-
+# -------------------- مفاتيح / إعداد --------------------
 RAW_KEYS = os.getenv("GEMINI_API_KEYS") or os.getenv("GEMINI_API_KEY", "")
 KEYS = [k.strip() for k in RAW_KEYS.split(",") if k.strip()]
 if not KEYS:
-    raise RuntimeError("ضع مفتاحًا في GEMINI_API_KEYS أو GEMINI_API_KEY")
+    raise RuntimeError("ضع مفتاحًا في GEMINI_API_KEY أو GEMINI_API_KEYS (يمكن فصل عدة مفاتيح بفاصلة)")
 
 _keys_cycle = itertools.cycle(KEYS)
 _current_key = None
-
 def _use_next_key():
-    """بدّل مفتاح Gemini الحالي."""
     global _current_key
     _current_key = next(_keys_cycle)
     genai.configure(api_key=_current_key)
-
 _use_next_key()
 
-# استخدم أسماء نماذج حديثة ومتوافقة
-CHAT_MODEL = os.getenv("CHAT_MODEL", "gemini-1.5-pro")
-EMBED_MODEL = os.getenv("EMBED_MODEL", "text-embedding-004")
+# اختر افتراضيًا نموذج متوافق دائمًا (يمكن تغييره من متغير CHAT_MODEL لاحقًا)
+CHAT_MODEL = os.getenv("CHAT_MODEL", "gemini-pro")            # آمن مع v1beta والنسخ الحديثة
+EMBED_MODEL = os.getenv("EMBED_MODEL", "text-embedding-004")  # لأغراض البحث الدلالي
 DB_PATH     = os.getenv("DB_PATH", "/tmp/bassam_brain.sqlite3")
 
-# ============================ التطبيق و CORS ============================
-
+# -------------------- FastAPI + CORS --------------------
 app = FastAPI(title="Bassam Chat AI")
 app.add_middleware(
     CORSMiddleware,
@@ -42,8 +34,7 @@ app.add_middleware(
     allow_methods=["*"], allow_headers=["*"],
 )
 
-# ============================ قاعدة المعرفة (SQLite + Embeddings) ============================
-
+# -------------------- قاعدة المعرفة (SQLite + Embeddings) --------------------
 def _conn():
     return sqlite3.connect(DB_PATH, check_same_thread=False)
 
@@ -58,12 +49,11 @@ def init_db():
     );""")
     con.commit(); con.close()
 
-def _is_rate_limit(msg:str)->bool:
+def _is_rate_limit(msg: str) -> bool:
     m = msg.lower()
     return ("429" in m) or ("rate" in m and "limit" in m) or ("quota" in m)
 
 def _with_key_rotation(fn, max_tries=None):
-    """شغّل fn() وإذا ظهرت 429 يبدّل المفتاح ويحاول مجددًا."""
     tries = 0
     max_tries = max_tries or len(KEYS)
     last = None
@@ -85,14 +75,13 @@ def embed_text(text: str) -> List[float]:
     def _do():
         return genai.embed_content(model=EMBED_MODEL, content=text)
     emb = _with_key_rotation(_do)
-    # إرجاع الشكل المناسب حسب نسخة المكتبة
-    return emb.get("embedding") or emb.get("data",[{}])[0].get("embedding", [])
+    return emb.get("embedding") or emb["data"][0]["embedding"]
 
 def cosine(a: List[float], b: List[float]) -> float:
     if not a or not b or len(a)!=len(b): return 0.0
     dot = sum(x*y for x,y in zip(a,b))
-    na = math.sqrt(sum(x*x for x in a)) or 1e-9
-    nb = math.sqrt(sum(y*y for y in b)) or 1e-9
+    na = (sum(x*x for x in a) ** 0.5) or 1e-9
+    nb = (sum(y*y for y in b) ** 0.5) or 1e-9
     return dot/(na*nb)
 
 def add_doc(title: str, content: str):
@@ -115,8 +104,7 @@ def search_docs(query: str, k=5):
     ranked.sort(key=lambda x:x[2], reverse=True)
     return ranked[:k]
 
-# ============================ واجهة الويب (HTML + JS) ============================
-
+# -------------------- HTML بسيط --------------------
 PAGE = """<!doctype html>
 <html lang="ar" dir="rtl"><head>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
@@ -216,20 +204,7 @@ $("#q").addEventListener("keydown",e=>{if(e.key==="Enter")$("#send").click();});
 def home(_: Request):
     return HTMLResponse(PAGE)
 
-# =============== أدوات Debug لمعرفة النماذج المتاحة =================
-@app.get("/_debug/models")
-def debug_models():
-    try:
-        names = []
-        for m in genai.list_models():
-            if "generateContent" in getattr(m, "supported_generation_methods", []):
-                names.append(m.name)
-        return {"ok": True, "models": names[:50]}
-    except Exception as e:
-        return {"ok": False, "error": str(e)}
-
-# ============================ رفع نص للمخزن ============================
-
+# -------------------- رفع نص للمخزن --------------------
 @app.post("/upload")
 async def upload(data: dict):
     try:
@@ -241,15 +216,14 @@ async def upload(data: dict):
     except Exception as e:
         return {"error": str(e)}
 
-# ============================ تعلّم من الويب (DuckDuckGo + تلخيص) ============================
-
+# -------------------- تعلّم من الويب (DuckDuckGo + تلخيص) --------------------
 DDG_URL = "https://duckduckgo.com/html/?q="
 
 def _clean_text(html: str) -> str:
-    html = re.sub(r"(?is)<(script|style).*?>.*?</\1>", " ", html)
+    html = re.sub(r"(?is)<(script|style).*?>.*?</\\1>", " ", html)
     text = re.sub(r"(?s)<.*?>", " ", html)
-    text = re.sub(r"[ \t\xa0]+", " ", text)
-    text = re.sub(r"\n+", "\n", text)
+    text = re.sub(r"[ \\t\\xa0]+", " ", text)
+    text = re.sub(r"\\n+", "\\n", text)
     return textwrap.shorten(text.strip(), width=4000, placeholder="...")
 
 async def _fetch(url: str) -> str:
@@ -259,7 +233,7 @@ async def _fetch(url: str) -> str:
         return r.text
 
 async def _ddg_links(query: str, n=4) -> List[str]:
-    html = await _fetch(DDG_URL + quote_plus(query))  # ← هنا الإصلاح
+    html = await _fetch(DDG_URL + httpx.utils.quote(query, safe=""))
     links = re.findall(r'<a[^>]+class="result__a"[^>]+href="(.*?)"', html)
     if not links:
         links = re.findall(r'<a rel="nofollow" class="result__a" href="(.*?)"', html)
@@ -301,8 +275,7 @@ async def web_learn(data: dict):
     except Exception as e:
         return {"error": str(e)}
 
-# ============================ الدردشة (بث حي + تعلّم ذاتي) ============================
-
+# -------------------- الدردشة (بث حي + تعلّم ذاتي) --------------------
 @app.post("/chat")
 async def chat(payload: dict):
     msg        = (payload.get("message") or "").strip()
@@ -343,7 +316,17 @@ async def chat(payload: dict):
             if cites:
                 yield f"\n\nالمراجع: {'، '.join(cites)}".encode()
         except Exception as e:
-            if _is_rate_limit(str(e)):
+            # لو كان 404 بسبب نموذج حديث، جرّب fallback فوريًا
+            if "404" in str(e) or "not found" in str(e).lower():
+                try:
+                    model = genai.GenerativeModel("gemini-pro")
+                    resp = model.generate_content(prompt, stream=True)
+                    for ch in resp:
+                        yield (ch.text or "").encode("utf-8")
+                    return
+                except Exception as e2:
+                    yield f"\n❌ خطأ: {e2}".encode()
+            elif _is_rate_limit(str(e)):
                 try:
                     _use_next_key()
                     model = genai.GenerativeModel(CHAT_MODEL)
@@ -357,5 +340,31 @@ async def chat(payload: dict):
                 yield f"\n❌ خطأ: {e}".encode()
     return StreamingResponse(stream(), media_type="text/plain; charset=utf-8")
 
-# ============================ تشغيل ============================
+# -------------------- صحّة وخدمات فحص --------------------
+@app.get("/healthz")
+def healthz():
+    return {"ok": True}
+
+@app.get("/models", response_class=PlainTextResponse)
+def list_models():
+    try:
+        ms = [m.name for m in genai.list_models() if "generateContent" in getattr(m, "supported_generation_methods", [])]
+        return "\n".join(ms)
+    except Exception as e:
+        return f"ERR: {e}"
+
+@app.get("/diag", response_class=PlainTextResponse)
+def diag():
+    import google.generativeai as g
+    masked = (_current_key[:6] + "..." + _current_key[-4:]) if _current_key else "NONE"
+    lines = [
+        f"google-generativeai version: {getattr(g, '__version__', 'unknown')}",
+        f"CHAT_MODEL={CHAT_MODEL}",
+        f"EMBED_MODEL={EMBED_MODEL}",
+        f"DB_PATH={DB_PATH}",
+        f"API_KEY(masked)={masked}",
+    ]
+    return "\n".join(lines)
+
+# -------------------- تشغيل --------------------
 init_db()
