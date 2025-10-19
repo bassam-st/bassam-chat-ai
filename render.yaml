@@ -1,10 +1,17 @@
 services:
   - type: web
-    name: bassam-core
+    name: bassam-chat-ai
     env: python
-    plan: free
+    plan: starter
+    autoDeploy: true
     buildCommand: pip install -r requirements.txt
-    startCommand: uvicorn main:app --host 0.0.0.0 --port 10000
+    startCommand: uvicorn main:app --host 0.0.0.0 --port $PORT
     envVars:
-      - key: GEMINI_API_KEY
+      - key: GEMINI_API_KEYS   # ضع مفاتيح Gemini مفصولة بفواصل من لوحة Render (لا تكتب القيمة هنا)
         sync: false
+      - key: CHAT_MODEL
+        value: gemini-1.5-flash
+      - key: EMBED_MODEL
+        value: text-embedding-004
+      - key: DB_PATH
+        value: /tmp/bassam_brain.sqlite3
