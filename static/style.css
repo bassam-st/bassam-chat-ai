@@ -1,13 +1,37 @@
-body{background:#0b0d10;color:#e7e7e7;font-family:system-ui,Segoe UI,Tahoma,Arial,sans-serif}
-.container{max-width:900px;margin:24px auto;padding:0 12px}
-h1{margin-bottom:8px}
-section{margin:18px 0;padding:12px;border:1px solid #222;border-radius:10px;background:#121418}
-input,textarea,button{width:100%;padding:10px;border-radius:10px;border:1px solid #333;background:#0f1114;color:#e7e7e7}
-input,textarea{margin:6px 0 10px}
-button{cursor:pointer;background:#2b5cff;border:none}
-button:hover{filter:brightness(1.1)}
-.chat-box{max-height:50vh;overflow:auto;background:#0f1114;border-radius:10px;padding:12px;margin-bottom:8px}
-.bubble{padding:10px;border-radius:10px;margin:8px 0;white-space:pre-wrap}
-.bubble.user{background:#1e2430}
-.bubble.bot{background:#141a22}
-label{display:block;margin-bottom:8px}
+:root { --bg:#0f1116; --panel:#151925; --text:#e9eef7; --muted:#98a2b3; --acc:#3b82f6; }
+* { box-sizing: border-box; }
+body {
+  margin: 0; font-family: system-ui, -apple-system, Segoe UI, Roboto, "Noto Naskh Arabic", sans-serif;
+  background: var(--bg); color: var(--text);
+}
+header { padding: 24px; text-align: center; }
+h1 { margin: 0 0 6px; font-weight: 700; }
+.sub { color: var(--muted); margin: 0; }
+
+.panel {
+  max-width: 920px; margin: 12px auto; background: var(--panel); padding: 16px;
+  border:1px solid #20263a; border-radius: 14px;
+}
+h3 { margin-top:0; }
+label.chk { display:flex; align-items:center; gap:8px; margin-bottom:8px; color:#cbd5e1; }
+
+textarea, input[type="text"], input[type="file"], input[type="search"], input[type="url"], input[type="number"], input[type="email"], input {
+  width: 100%; padding: 10px 12px; border-radius: 10px; border:1px solid #27314c; background:#0c101a; color:var(--text);
+}
+.row { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin: 10px 0; }
+button {
+  background: var(--acc); color:#fff; border:none; padding: 10px 16px; border-radius: 12px; cursor: pointer; font-weight:600;
+}
+button:hover { filter: brightness(1.05); }
+
+#kb-status { margin-top: 8px; color:#bcd3ff; }
+
+#chat {
+  height: 360px; overflow:auto; background:#0c101a; border:1px solid #27314c; border-radius:12px; padding:12px; margin-bottom:10px;
+}
+.bubble { max-width: 90%; padding:10px 12px; margin:6px 0; border-radius:12px; line-height:1.6; white-space:pre-wrap; }
+.bubble.user { background:#1e293b; margin-left:auto; }
+.bubble.bot  { background:#101828; border:1px solid #1f2a44; }
+
+footer { text-align:center; color:var(--muted); padding:22px 10px; }
+@media (max-width:720px){ .row { grid-template-columns: 1fr; } #chat{height: 320px;} }
