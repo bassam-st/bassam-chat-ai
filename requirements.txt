@@ -5,3 +5,5 @@ sse-starlette
 google-generativeai
 httpx
 python-multipart
+google-generativeai
+numpy
