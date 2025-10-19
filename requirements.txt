@@ -3,3 +3,5 @@ uvicorn[standard]
 google-generativeai
 python-multipart
 httpx
+beautifulsoup4
+readability-lxml
