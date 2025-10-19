@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Bassam Chat AI</title>
+  <style>
+    body{font-family:system-ui,Arial;padding:16px;background:#0f1013;color:#eaeaea}
+    .box{max-width:780px;margin:auto}
+    .chat{white-space:pre-wrap;line-height:1.6;background:#17181d;border:1px solid #2a2b31;border-radius:12px;padding:14px;min-height:220px}
+    input,button{font-size:16px}
+    input{width:100%;padding:12px;border-radius:10px;border:1px solid #2a2b31;background:#121317;color:#eaeaea}
+    button{margin-top:8px;padding:10px 14px;border-radius:10px;border:1px solid #2a2b31;background:#1f2330;color:#fff;cursor:pointer}
+    .muted{color:#9aa0a6;font-size:12px}
+  </style>
+</head>
+<body>
+  <div class="box">
+    <h2>🤖 Bassam Chat AI (Gemini)</h2>
+    <div class="chat" id="out"></div>
+    <div style="margin-top:10px">
+      <input id="in" placeholder="اكتب سؤالك هنا..." />
+      <button onclick="send()">إرسال</button>
+    </div>
+    <p class="muted">يتم بث الإجابة مباشرة…</p>
+  </div>
+
+  <script>
+    const out = document.getElementById('out');
+    const input = document.getElementById('in');
+
+    function send() {
+      const q = input.value.trim();
+      if (!q) return;
+      out.textContent = "…";
+      const es = new EventSource(`/api/chat?prompt=${encodeURIComponent(q)}`);
+      out.textContent = "";
+      es.onmessage = (e) => {
+        if (e.data === "[DONE]") { es.close(); return; }
+        out.textContent += e.data;
+        out.scrollTop = out.scrollHeight;
+      };
+      es.onerror = () => { out.textContent += "\n[خطأ في البث]"; es.close(); };
+    }
+    input.addEventListener('keydown', (e) => { if (e.key === 'Enter') send(); });
+  </script>
+</body>
+</html>
