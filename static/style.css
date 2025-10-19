@@ -1,90 +1,13 @@
-/* 🌌 تصميم واجهة Bassam Chat AI */
-:root {
-  --bg: #0b0f1a;
-  --card: #131b2e;
-  --text: #e6e9f0;
-  --accent: #8b5cf6;
-  --accent2: #a78bfa;
-}
-
-body {
-  background-color: var(--bg);
-  color: var(--text);
-  font-family: "Cairo", sans-serif;
-  margin: 0;
-  padding: 0;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  height: 100vh;
-}
-
-h1 {
-  color: var(--accent2);
-  font-size: 2rem;
-  margin-bottom: 10px;
-  text-align: center;
-}
-
-.chat-box {
-  width: 90%;
-  max-width: 700px;
-  background: var(--card);
-  border-radius: 15px;
-  padding: 20px;
-  box-shadow: 0 0 15px rgba(139, 92, 246, 0.3);
-  display: flex;
-  flex-direction: column;
-  height: 70vh;
-}
-
-#messages {
-  flex: 1;
-  overflow-y: auto;
-  margin-bottom: 10px;
-  padding-right: 5px;
-}
-
-.message {
-  padding: 8px 10px;
-  margin: 5px 0;
-  border-radius: 10px;
-  max-width: 80%;
-}
-
-.user {
-  background-color: var(--accent);
-  align-self: flex-end;
-  color: white;
-}
-
-.bot {
-  background-color: #1e293b;
-  align-self: flex-start;
-}
-
-input[type="text"] {
-  width: calc(100% - 80px);
-  padding: 10px;
-  border: none;
-  border-radius: 8px;
-  outline: none;
-  background: #1e293b;
-  color: white;
-}
-
-button {
-  width: 60px;
-  background-color: var(--accent);
-  border: none;
-  border-radius: 8px;
-  color: white;
-  font-weight: bold;
-  cursor: pointer;
-  transition: background 0.2s;
-}
-
-button:hover {
-  background-color: var(--accent2);
-}
+body{background:#0b0d10;color:#e7e7e7;font-family:system-ui,Segoe UI,Tahoma,Arial,sans-serif}
+.container{max-width:900px;margin:24px auto;padding:0 12px}
+h1{margin-bottom:8px}
+section{margin:18px 0;padding:12px;border:1px solid #222;border-radius:10px;background:#121418}
+input,textarea,button{width:100%;padding:10px;border-radius:10px;border:1px solid #333;background:#0f1114;color:#e7e7e7}
+input,textarea{margin:6px 0 10px}
+button{cursor:pointer;background:#2b5cff;border:none}
+button:hover{filter:brightness(1.1)}
+.chat-box{max-height:50vh;overflow:auto;background:#0f1114;border-radius:10px;padding:12px;margin-bottom:8px}
+.bubble{padding:10px;border-radius:10px;margin:8px 0;white-space:pre-wrap}
+.bubble.user{background:#1e2430}
+.bubble.bot{background:#141a22}
+label{display:block;margin-bottom:8px}
