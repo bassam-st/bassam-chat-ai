@@ -7,74 +7,102 @@
   <link rel="stylesheet" href="/static/style.css"/>
 </head>
 <body>
-  <main class="container">
+  <header>
     <h1>Bassam Chat AI (Gemini) 🤖</h1>
-    <p>المعرفة المخزنة: <b id="doc-count">{{ doc_count }}</b> مستند</p>
+    <p class="sub">يدعم البحث الدلالي من مخزن المعرفة + دردشة عربية فورية.</p>
+  </header>
 
-    <section class="kb">
-      <h2>➕ إضافة معرفة (تدخل في البحث الدلالي)</h2>
-      <form id="kb-form">
-        <input name="title" placeholder="عنوان المستند" required />
-        <textarea name="content" rows="6" placeholder="ألصق نصًا أو ملاحظاتك هنا" required></textarea>
-        <button type="submit">إضافة للمخزن</button>
-        <span id="kb-status"></span>
-      </form>
-    </section>
+  <section class="panel">
+    <h3>المخزن الدلالي (RAG)</h3>
+    <label>ألصق نصًا هنا:</label>
+    <textarea id="kb-text" rows="7" placeholder="ألصق نصًا أو ملخصًا أو مقالة..."></textarea>
+    <div class="row">
+      <input id="kb-title" placeholder="عنوان اختياري"/>
+      <input type="file" id="kb-file" />
+    </div>
+    <button id="btn-add">إضافة للمخزن</button>
+    <div id="kb-status"></div>
+  </section>
 
-    <section class="chat">
-      <h2>💬 المحادثة</h2>
-      <label><input type="checkbox" id="use-search" checked /> استخدم البحث الدلالي</label>
-      <div id="chat-box" class="chat-box"></div>
-      <form id="chat-form">
-        <input id="msg" placeholder="اكتب سؤالك هنا..." autocomplete="off" />
-        <button>إرسال</button>
-      </form>
-    </section>
-  </main>
+  <section class="panel">
+    <h3>المحادثة 💬</h3>
+    <label class="chk">
+      <input type="checkbox" id="use-search" checked />
+      <span>استخدم البحث الدلالي</span>
+    </label>
+
+    <div id="chat"></div>
+
+    <div class="row">
+      <input id="msg" placeholder="اكتب سؤالك هنا..." />
+      <button id="send">إرسال</button>
+    </div>
+  </section>
+
+  <footer>
+    <small>بُني باستخدام FastAPI + Gemini. التخزين في /tmp (غير دائم على الخطة المجانية).</small>
+  </footer>
 
 <script>
-const $ = s => document.querySelector(s);
+const $ = (sel) => document.querySelector(sel);
 
-$("#kb-form").addEventListener("submit", async (e) => {
-  e.preventDefault();
-  const fd = new FormData(e.target);
-  $("#kb-status").textContent = "جاري الإضافة...";
-  const res = await fetch("/upload", { method: "POST", body: fd });
-  const ok = (await res.json()).ok;
-  $("#kb-status").textContent = ok ? "✓ تمت الإضافة" : "حدث خطأ";
-  // عدّاد تقريبي
-  const c = $("#doc-count"); c.textContent = (parseInt(c.textContent||"0")+1);
-  e.target.reset();
-});
+function addBubble(text, who="bot"){
+  const div = document.createElement("div");
+  div.className = "bubble " + who;
+  div.textContent = text;
+  $("#chat").appendChild(div);
+  $("#chat").scrollTop = $("#chat").scrollHeight;
+}
 
-$("#chat-form").addEventListener("submit", async (e) => {
-  e.preventDefault();
-  const message = $("#msg").value.trim();
-  if (!message) return;
-  $("#msg").value = "";
-  const bubble = document.createElement("div");
-  bubble.className = "bubble user";
-  bubble.textContent = message;
-  $("#chat-box").appendChild(bubble);
+$("#btn-add").onclick = async () => {
+  const text = $("#kb-text").value.trim();
+  const title = $("#kb-title").value.trim();
+  const file = $("#kb-file").files[0];
 
-  const bot = document.createElement("div");
-  bot.className = "bubble bot";
-  $("#chat-box").appendChild(bot);
+  const fd = new FormData();
+  if (title) fd.append("title", title);
+  if (text) fd.append("text", text);
+  if (file) fd.append("file", file);
 
-  const res = await fetch("/chat", {
-    method: "POST",
-    headers: {"Content-Type":"application/json"},
-    body: JSON.stringify({ message, use_search: $("#use-search").checked })
-  });
-
-  const reader = res.body.getReader();
-  const decoder = new TextDecoder();
-  while (true) {
-    const {value, done} = await reader.read();
-    if (done) break;
-    bot.textContent += decoder.decode(value, {stream:true});
-    $("#chat-box").scrollTop = $("#chat-box").scrollHeight;
+  $("#kb-status").textContent = "جارِ الإضافة...";
+  try {
+    const res = await fetch("/upload", { method: "POST", body: fd });
+    const data = await res.json();
+    if (data.ok) {
+      $("#kb-status").textContent = `✔️ تم الحفظ: ${data.title} (${data.chars} حرف)`;
+      $("#kb-text").value = ""; $("#kb-title").value = ""; $("#kb-file").value = "";
+    } else {
+      $("#kb-status").textContent = "❌ " + (data.error || "فشل غير معروف");
+    }
+  } catch (e) {
+    $("#kb-status").textContent = "❌ خطأ في الشبكة";
   }
+};
+
+$("#send").onclick = async () => {
+  const msg = $("#msg").value.trim();
+  if (!msg) return;
+  addBubble(msg, "user");
+  $("#msg").value = "";
+  addBubble("… يجري التفكير …", "bot");
+
+  try {
+    const res = await fetch("/chat", {
+      method: "POST",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({ message: msg, use_search: $("#use-search").checked })
+    });
+    const data = await res.json();
+    const last = document.querySelector("#chat .bubble.bot:last-child");
+    last.textContent = data.reply || data.error || "❌ حدث خطأ في الخادم";
+  } catch (e) {
+    const last = document.querySelector("#chat .bubble.bot:last-child");
+    last.textContent = "❌ مشكلة اتصال";
+  }
+};
+
+$("#msg").addEventListener("keydown", (e)=>{
+  if (e.key === "Enter") $("#send").click();
 });
 </script>
 </body>
