@@ -1,4 +1,5 @@
 fastapi
 uvicorn[standard]
-google-generativeai>=0.7.0
-httpx>=0.27
+google-generativeai>=0.8.3
+python-multipart
+httpx
