@@ -1,48 +1,81 @@
 <!doctype html>
 <html lang="ar" dir="rtl">
 <head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>Bassam Chat AI</title>
-  <style>
-    body{font-family:system-ui,Arial;padding:16px;background:#0f1013;color:#eaeaea}
-    .box{max-width:780px;margin:auto}
-    .chat{white-space:pre-wrap;line-height:1.6;background:#17181d;border:1px solid #2a2b31;border-radius:12px;padding:14px;min-height:220px}
-    input,button{font-size:16px}
-    input{width:100%;padding:12px;border-radius:10px;border:1px solid #2a2b31;background:#121317;color:#eaeaea}
-    button{margin-top:8px;padding:10px 14px;border-radius:10px;border:1px solid #2a2b31;background:#1f2330;color:#fff;cursor:pointer}
-    .muted{color:#9aa0a6;font-size:12px}
-  </style>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width,initial-scale=1"/>
+  <title>Bassam Chat AI (Gemini)</title>
+  <link rel="stylesheet" href="/static/style.css"/>
 </head>
 <body>
-  <div class="box">
-    <h2>🤖 Bassam Chat AI (Gemini)</h2>
-    <div class="chat" id="out"></div>
-    <div style="margin-top:10px">
-      <input id="in" placeholder="اكتب سؤالك هنا..." />
-      <button onclick="send()">إرسال</button>
-    </div>
-    <p class="muted">يتم بث الإجابة مباشرة…</p>
-  </div>
+  <main class="container">
+    <h1>Bassam Chat AI (Gemini) 🤖</h1>
+    <p>المعرفة المخزنة: <b id="doc-count">{{ doc_count }}</b> مستند</p>
 
-  <script>
-    const out = document.getElementById('out');
-    const input = document.getElementById('in');
+    <section class="kb">
+      <h2>➕ إضافة معرفة (تدخل في البحث الدلالي)</h2>
+      <form id="kb-form">
+        <input name="title" placeholder="عنوان المستند" required />
+        <textarea name="content" rows="6" placeholder="ألصق نصًا أو ملاحظاتك هنا" required></textarea>
+        <button type="submit">إضافة للمخزن</button>
+        <span id="kb-status"></span>
+      </form>
+    </section>
 
-    function send() {
-      const q = input.value.trim();
-      if (!q) return;
-      out.textContent = "…";
-      const es = new EventSource(`/api/chat?prompt=${encodeURIComponent(q)}`);
-      out.textContent = "";
-      es.onmessage = (e) => {
-        if (e.data === "[DONE]") { es.close(); return; }
-        out.textContent += e.data;
-        out.scrollTop = out.scrollHeight;
-      };
-      es.onerror = () => { out.textContent += "\n[خطأ في البث]"; es.close(); };
-    }
-    input.addEventListener('keydown', (e) => { if (e.key === 'Enter') send(); });
-  </script>
+    <section class="chat">
+      <h2>💬 المحادثة</h2>
+      <label><input type="checkbox" id="use-search" checked /> استخدم البحث الدلالي</label>
+      <div id="chat-box" class="chat-box"></div>
+      <form id="chat-form">
+        <input id="msg" placeholder="اكتب سؤالك هنا..." autocomplete="off" />
+        <button>إرسال</button>
+      </form>
+    </section>
+  </main>
+
+<script>
+const $ = s => document.querySelector(s);
+
+$("#kb-form").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const fd = new FormData(e.target);
+  $("#kb-status").textContent = "جاري الإضافة...";
+  const res = await fetch("/upload", { method: "POST", body: fd });
+  const ok = (await res.json()).ok;
+  $("#kb-status").textContent = ok ? "✓ تمت الإضافة" : "حدث خطأ";
+  // عدّاد تقريبي
+  const c = $("#doc-count"); c.textContent = (parseInt(c.textContent||"0")+1);
+  e.target.reset();
+});
+
+$("#chat-form").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const message = $("#msg").value.trim();
+  if (!message) return;
+  $("#msg").value = "";
+  const bubble = document.createElement("div");
+  bubble.className = "bubble user";
+  bubble.textContent = message;
+  $("#chat-box").appendChild(bubble);
+
+  const bot = document.createElement("div");
+  bot.className = "bubble bot";
+  $("#chat-box").appendChild(bot);
+
+  const res = await fetch("/chat", {
+    method: "POST",
+    headers: {"Content-Type":"application/json"},
+    body: JSON.stringify({ message, use_search: $("#use-search").checked })
+  });
+
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  while (true) {
+    const {value, done} = await reader.read();
+    if (done) break;
+    bot.textContent += decoder.decode(value, {stream:true});
+    $("#chat-box").scrollTop = $("#chat-box").scrollHeight;
+  }
+});
+</script>
 </body>
 </html>
