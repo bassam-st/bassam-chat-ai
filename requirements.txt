@@ -1,7 +1,4 @@
 fastapi
 uvicorn[standard]
-google-generativeai
-python-multipart
-httpx
-beautifulsoup4
-readability-lxml
+google-generativeai>=0.7.0
+httpx>=0.27
