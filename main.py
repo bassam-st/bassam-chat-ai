@@ -1,370 +1,300 @@
-# main.py — Bassam Chat AI (RAG + Streaming + Web Learn + Diag)
-import os, json, math, sqlite3, uuid, re, itertools, textwrap
-from typing import List
-from fastapi import FastAPI, Request
-from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse, PlainTextResponse
+# main.py — Bassam Chat AI Pro
+import os, io, re, json, math, uuid, sqlite3, itertools, zipfile, base64, datetime, textwrap
+from typing import List, Tuple, Optional, Dict
+from fastapi import FastAPI, Request, UploadFile, File, Form
+from fastapi.responses import HTMLResponse, StreamingResponse, JSONResponse, PlainTextResponse
+from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
+from starlette.templating import Jinja2Templates
 import httpx
 import google.generativeai as genai
+
+APP_TITLE = "Bassam Chat AI — Pro"
+DB_PATH = os.getenv("DB_PATH", "data.db")
 
 # -------------------- مفاتيح / إعداد --------------------
 RAW_KEYS = os.getenv("GEMINI_API_KEYS") or os.getenv("GEMINI_API_KEY", "")
 KEYS = [k.strip() for k in RAW_KEYS.split(",") if k.strip()]
 if not KEYS:
-    raise RuntimeError("ضع مفتاحًا في GEMINI_API_KEY أو GEMINI_API_KEYS (يمكن فصل عدة مفاتيح بفاصلة)")
-
-_keys_cycle = itertools.cycle(KEYS)
+    raise RuntimeError("يرجى ضبط GEMINI_API_KEY أو GEMINI_API_KEYS (يمكن فصل عدة مفاتيح بفاصلة)")
+_key_cycle = itertools.cycle(KEYS)
 _current_key = None
-def _use_next_key():
+
+CHAT_MODEL = os.getenv("CHAT_MODEL", "gemini-1.5-flash")
+EMBED_MODEL = os.getenv("EMBED_MODEL", "text-embedding-004")
+
+def _set_key():
     global _current_key
-    _current_key = next(_keys_cycle)
+    _current_key = next(_key_cycle)
     genai.configure(api_key=_current_key)
-_use_next_key()
 
-# اختر افتراضيًا نموذج متوافق دائمًا (يمكن تغييره من متغير CHAT_MODEL لاحقًا)
-CHAT_MODEL = os.getenv("CHAT_MODEL", "gemini-pro")            # آمن مع v1beta والنسخ الحديثة
-EMBED_MODEL = os.getenv("EMBED_MODEL", "text-embedding-004")  # لأغراض البحث الدلالي
-DB_PATH     = os.getenv("DB_PATH", "/tmp/bassam_brain.sqlite3")
+_set_key()
 
-# -------------------- FastAPI + CORS --------------------
-app = FastAPI(title="Bassam Chat AI")
+# -------------------- قاعدة البيانات --------------------
+def init_db():
+    con = sqlite3.connect(DB_PATH)
+    cur = con.cursor()
+    cur.execute("""CREATE TABLE IF NOT EXISTS docs(
+        id TEXT PRIMARY KEY,
+        source TEXT,
+        path TEXT,
+        chunk TEXT,
+        embedding BLOB
+    )""")
+    cur.execute("""CREATE INDEX IF NOT EXISTS idx_docs_source_path ON docs(source, path)""")
+    con.commit()
+    con.close()
+
+def db_insert_many(rows: List[Tuple[str,str,str,str,bytes]]):
+    con = sqlite3.connect(DB_PATH)
+    cur = con.cursor()
+    cur.executemany("INSERT OR REPLACE INTO docs(id,source,path,chunk,embedding) VALUES(?,?,?,?,?)", rows)
+    con.commit()
+    con.close()
+
+def db_search_similar(qvec: List[float], k=8) -> List[Dict]:
+    con = sqlite3.connect(DB_PATH)
+    cur = con.cursor()
+    cur.execute("SELECT id, source, path, chunk, embedding FROM docs")
+    res = []
+    for rid, source, path, chunk, emb_blob in cur.fetchall():
+        emb = json.loads(emb_blob.decode("utf-8"))
+        # cosine similarity
+        dot = sum(a*b for a,b in zip(qvec, emb))
+        na = math.sqrt(sum(a*a for a in qvec)) + 1e-9
+        nb = math.sqrt(sum(b*b for b in emb)) + 1e-9
+        sim = dot/(na*nb)
+        res.append((sim, {"id": rid, "source": source, "path": path, "chunk": chunk}))
+    res.sort(key=lambda x: x[0], reverse=True)
+    con.close()
+    return [r for _, r in res[:k]]
+
+# -------------------- أدوات الذكاء --------------------
+def embed_texts(texts: List[str]) -> List[List[float]]:
+    # إعادة المحاولة بتبديل المفتاح عند الفشل
+    for attempt in range(2*len(KEYS)):
+        try:
+            model = genai.embed_content(model=EMBED_MODEL, content=texts, task_type="retrieval_document")
+            data = model["embedding"] if "embedding" in model else model["data"]
+            # واجهة gemini قد تعيد مفرد أو متعدد؛ نطبّع إلى قائمة قوائم
+            if isinstance(data, list) and isinstance(data[0], float):
+                return [data]
+            elif isinstance(data, dict) and "embedding" in data:
+                return [data["embedding"]]
+            else:
+                # قد تكون {"data":[{"embedding":[...]}...]}
+                if isinstance(model, dict) and "data" in model:
+                    out = []
+                    for item in model["data"]:
+                        out.append(item["embedding"])
+                    return out
+                return data
+        except Exception as e:
+            _set_key()
+    raise RuntimeError("فشل إنشاء المتجهات")
+
+def embed_for_query(q: str) -> List[float]:
+    vecs = embed_texts([q])
+    return vecs[0]
+
+def chunk_text(txt: str, max_len=1200, overlap=120) -> List[str]:
+    words = re.split(r'(\s+)', txt)
+    chunks, cur, cur_len = [], [], 0
+    for w in words:
+        cur.append(w); cur_len += len(w)
+        if cur_len >= max_len:
+            chunks.append(''.join(cur).strip())
+            cur = cur[-1*overlap:] if overlap < len(cur) else []
+            cur_len = sum(len(x) for x in cur)
+    if cur:
+        chunks.append(''.join(cur).strip())
+    return [c for c in chunks if c]
+
+# -------------------- فهرسة ZIP بدون فك على القرص --------------------
+def index_zip_bytes(data: bytes, source_name="zip-upload") -> Dict:
+    zf = zipfile.ZipFile(io.BytesIO(data))
+    rows = []
+    total_files = 0
+    for name in zf.namelist():
+        if name.endswith('/'):
+            continue
+        # ندعم النصوص الشائعة
+        if not re.search(r'\.(txt|md|csv|json|py|js|ts|html|css|xml|yml|yaml)$', name, re.I):
+            continue
+        try:
+            raw = zf.read(name)
+            try:
+                txt = raw.decode("utf-8")
+            except UnicodeDecodeError:
+                txt = raw.decode("cp1256", errors="replace")
+        except Exception:
+            continue
+        total_files += 1
+        for ch in chunk_text(txt):
+            rows.append((str(uuid.uuid4()), source_name, name, ch, json.dumps(embed_for_query(ch)).encode("utf-8")))
+    if rows:
+        db_insert_many(rows)
+    return {"files_indexed": total_files, "chunks": len(rows)}
+
+# -------------------- بحث ويب مبسط (قابل للاستبدال بمزود API) --------------------
+async def web_search_summaries(q: str, client: httpx.AsyncClient) -> str:
+    """
+    تنفيذ خفيف الوزن: نحاول الطلب من DuckDuckGo HTML البسيط (بدون مفتاح).
+    في بيئات مقيّدة قد يفشل. الكود مصمم بحيث يمكنك استبداله بسهولة بمزود مثل Serper/Brave/Tavily.
+    """
+    try:
+        r = await client.get("https://duckduckgo.com/html/", params={"q": q}, timeout=15)
+        text = r.text
+        # اقتطاف بسيط للعناوين والسنبت
+        items = re.findall(r'<a[^>]*class="result__a"[^>]*>(.*?)</a>.*?<a class="result__url".*?>(.*?)</a>.*?class="result__snippet">(.*?)</a>', text, re.S)
+        bullets = []
+        for title, url, snip in items[:5]:
+            t = re.sub('<.*?>', '', title)
+            s = re.sub('<.*?>', '', snip)
+            bullets.append(f"- {t.strip()} — {s.strip()}")
+        if not bullets:
+            bullets = ["- (تعذر استخراج نتائج موثوقة، جرّب مزود API للبحث)"]
+        return "نتائج بحث مبدئية:\n" + "\n".join(bullets)
+    except Exception:
+        return "لم ينجح البحث المباشر بدون مفاتيح. يُفضّل ضبط مزود API للبحث عن الويب."
+
+# -------------------- تحديد النية --------------------
+INTENT_HINTS = {
+    "شرح": ["اشرح", "وضح", "فهم"],
+    "ترجمة": ["ترجم", "translate"],
+    "برمجة": ["كود", "شيفرة", "بايثون", "جافاسكربت", "API"],
+    "رياضيات": ["حل", "معادلة", "تفاضل", "تكامل"],
+    "معلومة_سريعة": ["ماهو", "ما هي", "متى", "أين"],
+}
+
+def detect_intent(q: str) -> str:
+    low = q.strip().lower()
+    for intent, keys in INTENT_HINTS.items():
+        for k in keys:
+            if k in low:
+                return intent
+    # fallback إلى نموذج خفيف عبر جيميني
+    try:
+        model = genai.GenerativeModel(CHAT_MODEL)
+        prompt = f"""صنّف نية هذا السؤال بإجابة كلمة واحدة فقط من القائمة:
+        [شرح, ترجمة, برمجة, رياضيات, معلومة_سريعة, غير_ذلك]
+        السؤال: {q}"""
+        out = model.generate_content(prompt)
+        ans = (out.text or "").strip()
+        ans = re.sub(r'[^اأء-ي_a-zA-Z]+', '', ans)
+        return ans or "غير_ذلك"
+    except Exception:
+        return "غير_ذلك"
+
+# -------------------- تكوين الإجابة (RAG + ويب) --------------------
+def build_system_prompt(q: str, intent: str, ctx_docs: List[Dict], web_sum: Optional[str]) -> str:
+    ctx_text = ""
+    if ctx_docs:
+        ctx_text = "\n\n".join([f"[{d['path']}]\n{d['chunk']}" for d in ctx_docs[:6]])
+    web_text = f"\n\n[ملخص الويب]\n{web_sum}" if web_sum else ""
+    guide = """قواعد الإجابة:
+- أجب بالعربية الفصحى البسيطة.
+- اذكر الخطوات العملية عندما يكون ذلك مفيدًا (نفذ/ثبّت/ابدأ/اعمل/...).
+- عندما تكون متأكدًا من المعلومة، كن حاسمًا؛ وإلا، وضّح درجة عدم اليقين.
+- إن كانت الإجابة تعتمد على نصوص داخلية، استشهد بأسماء الملفات داخل الأقواس [].
+- لا تنسق Markdown مفرطًا؛ فقط عناوين فرعية بسيطة وقوائم."""
+    return f"""[نية المستخدم]: {intent}
+[السؤال]: {q}
+
+[سياق داخلي مفهرس من ملفات ZIP]:
+{ctx_text}
+
+{web_text}
+
+{guide}
+— ابدأ الإجابة الآن:"""
+
+async def generate_stream(q: str, mode: str):
+    intent = detect_intent(q)
+    # استرجاع داخلي
+    ctx_docs = []
+    try:
+        qvec = embed_for_query(q)
+        ctx_docs = db_search_similar(qvec, k=8)
+    except Exception:
+        ctx_docs = []
+    # بحث ويب عند الحاجة
+    web_sum = None
+    if mode in ("auto", "web"):
+        async with httpx.AsyncClient() as client:
+            web_sum = await web_search_summaries(q, client)
+
+    prompt = build_system_prompt(q, intent, ctx_docs if mode != "web" else [], web_sum if mode != "rag" else None)
+
+    # بث من Gemini
+    model = genai.GenerativeModel(CHAT_MODEL)
+    try:
+        resp = model.generate_content(
+            [{"role": "user", "parts": [prompt]}],
+            stream=True
+        )
+        acc = ""
+        for chunk in resp:
+            text = getattr(chunk, "text", None)
+            if text:
+                acc += text
+                yield text.encode("utf-8")
+        # نهاية
+    except Exception as e:
+        yield f"\n[خطأ أثناء التوليد: {e}]".encode("utf-8")
+
+# -------------------- FastAPI --------------------
+app = FastAPI(title=APP_TITLE)
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"], allow_credentials=True,
-    allow_methods=["*"], allow_headers=["*"],
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
+app.mount("/static", StaticFiles(directory="static"), name="static")
+templates = Jinja2Templates(directory="templates")
 
-# -------------------- قاعدة المعرفة (SQLite + Embeddings) --------------------
-def _conn():
-    return sqlite3.connect(DB_PATH, check_same_thread=False)
-
-def init_db():
-    con = _conn(); cur = con.cursor()
-    cur.execute("""
-    CREATE TABLE IF NOT EXISTS docs(
-        id TEXT PRIMARY KEY,
-        title TEXT,
-        content TEXT,
-        embedding TEXT
-    );""")
-    con.commit(); con.close()
-
-def _is_rate_limit(msg: str) -> bool:
-    m = msg.lower()
-    return ("429" in m) or ("rate" in m and "limit" in m) or ("quota" in m)
-
-def _with_key_rotation(fn, max_tries=None):
-    tries = 0
-    max_tries = max_tries or len(KEYS)
-    last = None
-    while tries < max_tries:
-        try:
-            return fn()
-        except Exception as e:
-            last = e
-            if _is_rate_limit(str(e)):
-                _use_next_key()
-                tries += 1
-                continue
-            raise
-    raise last
-
-def embed_text(text: str) -> List[float]:
-    text = (text or "").strip()
-    if not text: return []
-    def _do():
-        return genai.embed_content(model=EMBED_MODEL, content=text)
-    emb = _with_key_rotation(_do)
-    return emb.get("embedding") or emb["data"][0]["embedding"]
-
-def cosine(a: List[float], b: List[float]) -> float:
-    if not a or not b or len(a)!=len(b): return 0.0
-    dot = sum(x*y for x,y in zip(a,b))
-    na = (sum(x*x for x in a) ** 0.5) or 1e-9
-    nb = (sum(y*y for y in b) ** 0.5) or 1e-9
-    return dot/(na*nb)
-
-def add_doc(title: str, content: str):
-    emb = embed_text(content)
-    con = _conn(); cur = con.cursor()
-    cur.execute("INSERT INTO docs VALUES(?,?,?,?)",
-                (str(uuid.uuid4()), title, content, json.dumps(emb)))
-    con.commit(); con.close()
-
-def search_docs(query: str, k=5):
-    qemb = embed_text(query)
-    con = _conn(); cur = con.cursor()
-    cur.execute("SELECT title,content,embedding FROM docs")
-    rows = cur.fetchall(); con.close()
-    ranked=[]
-    for t,c,e in rows:
-        try: emb = json.loads(e)
-        except: emb = []
-        ranked.append((t,c,cosine(qemb,emb)))
-    ranked.sort(key=lambda x:x[2], reverse=True)
-    return ranked[:k]
-
-# -------------------- HTML بسيط --------------------
-PAGE = """<!doctype html>
-<html lang="ar" dir="rtl"><head>
-<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Bassam Chat AI 🤖</title>
-<style>
-:root{--bg:#0d1117;--panel:#161b22;--text:#e6edf3;--muted:#9ca3af;--acc:#3b82f6;--ok:#22c55e;--err:#ef4444}
-*{box-sizing:border-box} body{margin:0;background:var(--bg);color:var(--text);font-family:system-ui,"Noto Naskh Arabic"}
-header{text-align:center;padding:18px} h1{margin:0} small{color:var(--muted)}
-.card{max-width:980px;margin:12px auto;padding:16px;background:var(--panel);border-radius:14px;border:1px solid #263041}
-label{display:inline-flex;gap:8px;align-items:center;margin:6px 10px 10px 0}
-textarea,input{width:100%;padding:10px;border-radius:10px;border:1px solid #27314c;background:#0c101a;color:var(--text)}
-button{background:var(--acc);border:none;color:#fff;padding:10px 16px;border-radius:10px;font-weight:700;cursor:pointer}
-#chat{height:380px;overflow:auto;background:#0c101a;border-radius:10px;border:1px solid #27314c;padding:12px;margin:10px 0}
-.msg{max-width:92%;padding:10px;margin:6px 0;border-radius:10px;white-space:pre-wrap}
-.user{background:#1e293b;margin-left:auto}
-.bot{background:#111827;border:1px solid #1f2937}
-.pill{display:inline-block;font:12px/1.6 system-ui;padding:3px 8px;border-radius:999px}
-.ok{background:rgba(34,197,94,.12);color:#22c55e;border:1px solid rgba(34,197,94,.25)}
-.err{background:rgba(239,68,68,.12);color:#ef4444;border:1px solid rgba(239,68,68,.25)}
-.row{display:flex;gap:8px}
-.row > * {flex:1}
-</style></head>
-<body>
-<header><h1>Bassam Chat AI 🤖</h1>
-<small>دردشة عربية + بحث دلالي + تعلّم تلقائي + تعلّم من الويب</small></header>
-
-<div class="card">
-  <h3>المخزن الدلالي (RAG) — إضافة يدويًا</h3>
-  <textarea id="kbtext" rows="5" placeholder="ألصق نصًا أو مقالًا..."></textarea>
-  <div class="row">
-    <input id="kbtitle" placeholder="عنوان اختياري">
-    <button id="add">إضافة للمخزن</button>
-  </div>
-  <div id="status"></div>
-</div>
-
-<div class="card">
-  <h3>إعدادات التعلّم من الويب</h3>
-  <label><input type="checkbox" id="web_on" checked> مفعل (يجلب معرفة نظيفة ويخزنها)</label>
-  <div class="row">
-    <input id="web_q" value="الذكاء الاصطناعي, تعلم الآلة, برمجة" placeholder="كلمات مفتاحية (مفصولة بفواصل)">
-    <button id="web_go">جلب وتلخيص الآن</button>
-  </div>
-  <small>يستخدم DuckDuckGo لجلب أفضل الروابط، ويخزن نصًا نظيفًا داخل قاعدة المعرفة.</small>
-  <div id="web_status"></div>
-</div>
-
-<div class="card">
-  <h3>المحادثة</h3>
-  <label><input type="checkbox" id="rag" checked> استخدم البحث الدلالي</label>
-  <label><input type="checkbox" id="learn" checked> فعّل التعلّم التلقائي من المحادثات</label>
-  <div id="chat"></div>
-  <div class="row">
-    <input id="q" placeholder="اكتب سؤالك...">
-    <button id="send">إرسال</button>
-  </div>
-</div>
-
-<script>
-const $=s=>document.querySelector(s); const chat=$("#chat");
-function push(t,w){let d=document.createElement("div");d.className="msg "+w;d.textContent=t;chat.appendChild(d);chat.scrollTop=chat.scrollHeight;return d;}
-
-$("#add").onclick=async()=>{
-  let t=$("#kbtext").value.trim(),h=$("#kbtitle").value.trim();
-  if(!t){alert("اكتب نصًا");return}
-  $("#status").innerHTML='<span class="pill">جارِ الحفظ...</span>';
-  const r=await fetch("/upload",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({title:h,text:t})});
-  const j=await r.json();
-  $("#status").innerHTML=j.ok?'<span class="pill ok">✔ تمت الإضافة</span>':'<span class="pill err">❌ '+j.error+'</span>';
-  if(j.ok){$("#kbtext").value="";$("#kbtitle").value="";}
-};
-
-$("#web_go").onclick=async()=>{
-  if(!$("#web_on").checked){alert("فعّل التعلّم من الويب أولًا");return}
-  $("#web_status").innerHTML='<span class="pill">يجلب المعرفة...</span>';
-  const r=await fetch("/web_learn",{method:"POST",headers:{"Content-Type":"application/json"},
-    body:JSON.stringify({q:$("#web_q").value})});
-  const j=await r.json();
-  $("#web_status").innerHTML=j.ok?('<span class="pill ok">جلب '+j.added+' مادة</span>'):('<span class="pill err">❌ '+j.error+'</span>');
-};
-
-$("#send").onclick=async()=>{
-  const msg=$("#q").value.trim(); if(!msg) return;
-  $("#q").value=""; push(msg,"user"); let hold=push("...","bot");
-  const r=await fetch("/chat",{method:"POST",headers:{"Content-Type":"application/json"},
-    body:JSON.stringify({message:msg,use_search:$("#rag").checked,learn:$("#learn").checked})});
-  if(!r.body){ hold.textContent="❌ لا يوجد بث"; return }
-  const reader=r.body.getReader(); const dec=new TextDecoder(); hold.textContent="";
-  while(1){const {value,done}=await reader.read(); if(done) break; hold.textContent+=dec.decode(value); chat.scrollTop=chat.scrollHeight;}
-};
-$("#q").addEventListener("keydown",e=>{if(e.key==="Enter")$("#send").click();});
-</script>
-</body></html>
-"""
+@app.on_event("startup")
+def _startup():
+    init_db()
 
 @app.get("/", response_class=HTMLResponse)
-def home(_: Request):
-    return HTMLResponse(PAGE)
-
-# -------------------- رفع نص للمخزن --------------------
-@app.post("/upload")
-async def upload(data: dict):
-    try:
-        title = (data.get("title") or "مستند").strip()[:80]
-        text  = (data.get("text")  or "").strip()
-        if not text: return {"error":"نص فارغ"}
-        add_doc(title, text)
-        return {"ok": True, "title": title, "chars": len(text)}
-    except Exception as e:
-        return {"error": str(e)}
-
-# -------------------- تعلّم من الويب (DuckDuckGo + تلخيص) --------------------
-DDG_URL = "https://duckduckgo.com/html/?q="
-
-def _clean_text(html: str) -> str:
-    html = re.sub(r"(?is)<(script|style).*?>.*?</\\1>", " ", html)
-    text = re.sub(r"(?s)<.*?>", " ", html)
-    text = re.sub(r"[ \\t\\xa0]+", " ", text)
-    text = re.sub(r"\\n+", "\\n", text)
-    return textwrap.shorten(text.strip(), width=4000, placeholder="...")
-
-async def _fetch(url: str) -> str:
-    async with httpx.AsyncClient(timeout=15, headers={"User-Agent":"Mozilla/5.0"}) as client:
-        r = await client.get(url)
-        r.raise_for_status()
-        return r.text
-
-async def _ddg_links(query: str, n=4) -> List[str]:
-    html = await _fetch(DDG_URL + httpx.utils.quote(query, safe=""))
-    links = re.findall(r'<a[^>]+class="result__a"[^>]+href="(.*?)"', html)
-    if not links:
-        links = re.findall(r'<a rel="nofollow" class="result__a" href="(.*?)"', html)
-    links = [u for u in links if "duckduckgo.com" not in u][:n]
-    return links
-
-async def _summarize(text: str, url:str) -> str:
-    prompt = f"""لخّص النص التالي في نقاط عربية واضحة مع ذكر المصدر في السطر الأخير.
-المصدر: {url}
-
-النص:
-{text[:3500]}"""
-    def _do():
-        model = genai.GenerativeModel(CHAT_MODEL)
-        return model.generate_content(prompt)
-    resp = _with_key_rotation(_do)
-    return resp.text.strip()
-
-@app.post("/web_learn")
-async def web_learn(data: dict):
-    try:
-        q = (data.get("q") or "").strip()
-        if not q: return {"error":"أدخل كلمات مفتاحية"}
-        added = 0
-        topics = [t.strip() for t in q.split(",") if t.strip()]
-        for topic in topics:
-            links = await _ddg_links(topic, n=3)
-            for u in links:
-                try:
-                    html = await _fetch(u)
-                    text = _clean_text(html)
-                    if len(text) < 200: continue
-                    summary = await _summarize(text, u)
-                    add_doc(f"ويب: {topic}", f"الرابط: {u}\n\nالملخص:\n{summary}")
-                    added += 1
-                except Exception:
-                    continue
-        return {"ok": True, "added": added}
-    except Exception as e:
-        return {"error": str(e)}
-
-# -------------------- الدردشة (بث حي + تعلّم ذاتي) --------------------
-@app.post("/chat")
-async def chat(payload: dict):
-    msg        = (payload.get("message") or "").strip()
-    use_search = bool(payload.get("use_search", True))
-    learn      = bool(payload.get("learn", True))
-    if not msg:
-        return JSONResponse({"error":"رسالة فارغة"}, status_code=400)
-
-    context, cites = [], []
-    if use_search:
-        for i,(t,c,_) in enumerate(search_docs(msg),1):
-            snippet = c[:1200]
-            context.append(f"[{i}] {t}: {snippet}")
-            cites.append(f"[{i}] {t}")
-
-    system = ("أنت مساعد عربي ذكي. استخدم (السياق) إن وُجد للإجابة بأمانة، "
-              "واكتب الجواب متسلسلًا أثناء البث. إن كان السؤال غامضًا فاطلب إيضاحًا.")
-    parts = [system]
-    if context: parts.append("السياق:\n" + "\n\n".join(context))
-    parts.append("السؤال:\n" + msg)
-    prompt = "\n\n".join(parts)
-
-    def stream():
-        try:
-            def _start():
-                model = genai.GenerativeModel(CHAT_MODEL)
-                return model.generate_content(prompt, stream=True)
-            resp = _with_key_rotation(_start)
-
-            final=[]
-            for ch in resp:
-                t = ch.text or ""
-                final.append(t)
-                yield t.encode("utf-8")
-            ans = "".join(final).strip()
-            if learn and ans:
-                add_doc(f"حوار: {msg[:40]}", f"سؤال: {msg}\nإجابة: {ans}")
-            if cites:
-                yield f"\n\nالمراجع: {'، '.join(cites)}".encode()
-        except Exception as e:
-            # لو كان 404 بسبب نموذج حديث، جرّب fallback فوريًا
-            if "404" in str(e) or "not found" in str(e).lower():
-                try:
-                    model = genai.GenerativeModel("gemini-pro")
-                    resp = model.generate_content(prompt, stream=True)
-                    for ch in resp:
-                        yield (ch.text or "").encode("utf-8")
-                    return
-                except Exception as e2:
-                    yield f"\n❌ خطأ: {e2}".encode()
-            elif _is_rate_limit(str(e)):
-                try:
-                    _use_next_key()
-                    model = genai.GenerativeModel(CHAT_MODEL)
-                    resp = model.generate_content(prompt, stream=True)
-                    for ch in resp:
-                        yield (ch.text or "").encode("utf-8")
-                    return
-                except Exception as e2:
-                    yield f"\n❌ خطأ: {e2}".encode()
-            else:
-                yield f"\n❌ خطأ: {e}".encode()
-    return StreamingResponse(stream(), media_type="text/plain; charset=utf-8")
-
-# -------------------- صحّة وخدمات فحص --------------------
-@app.get("/healthz")
-def healthz():
-    return {"ok": True}
-
-@app.get("/models", response_class=PlainTextResponse)
-def list_models():
-    try:
-        ms = [m.name for m in genai.list_models() if "generateContent" in getattr(m, "supported_generation_methods", [])]
-        return "\n".join(ms)
-    except Exception as e:
-        return f"ERR: {e}"
+def home(request: Request):
+    return templates.TemplateResponse("index.html", {"request": request, "title": APP_TITLE})
 
 @app.get("/diag", response_class=PlainTextResponse)
 def diag():
-    import google.generativeai as g
     masked = (_current_key[:6] + "..." + _current_key[-4:]) if _current_key else "NONE"
-    lines = [
-        f"google-generativeai version: {getattr(g, '__version__', 'unknown')}",
-        f"CHAT_MODEL={CHAT_MODEL}",
-        f"EMBED_MODEL={EMBED_MODEL}",
-        f"DB_PATH={DB_PATH}",
-        f"API_KEY(masked)={masked}",
-    ]
-    return "\n".join(lines)
+    return textwrap.dedent(f"""
+    Model: {CHAT_MODEL}
+    Embed: {EMBED_MODEL}
+    DB: {DB_PATH}
+    API(masked): {masked}
+    """).strip()
 
-# -------------------- تشغيل --------------------
-init_db()
+@app.post("/chat")
+def chat(req: dict, mode: str = "auto"):
+    q = (req or {}).get("q", "").strip()
+    if not q:
+        return PlainTextResponse("مطلوب سؤال.", status_code=400)
+    return StreamingResponse(generate_stream(q, mode), media_type="text/plain; charset=utf-8")
+
+@app.post("/ingest-zip", response_class=JSONResponse)
+async def ingest_zip(zip_url: Optional[str] = None, file: UploadFile = File(None)):
+    # قراءة من ملف مرفوع
+    if file is not None:
+        data = await file.read()
+        info = index_zip_bytes(data, source_name=file.filename or "zip-upload")
+        return {"ok": True, "message": f"تم فهرسة {info['files_indexed']} ملفًا و {info['chunks']} مقطع."}
+    # قراءة من رابط
+    if zip_url:
+        try:
+            async with httpx.AsyncClient() as client:
+                r = await client.get(zip_url, timeout=30)
+                r.raise_for_status()
+                info = index_zip_bytes(r.content, source_name=zip_url)
+                return {"ok": True, "message": f"تم فهرسة {info['files_indexed']} ملفًا و {info['chunks']} مقطع."}
+        except Exception as e:
+            return {"ok": False, "message": f"تعذر تنزيل ZIP: {e}"}
+    return {"ok": False, "message": "يرجى رفع ملف ZIP أو تزويد رابط zip_url."}
