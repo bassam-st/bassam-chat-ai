@@ -12,23 +12,48 @@
     <p class="sub">يدعم البحث الدلالي من مخزن المعرفة + دردشة عربية فورية.</p>
   </header>
 
+  <!-- قسم التغذية اليدوية (نص/ملف واحد) -->
   <section class="panel">
-    <h3>المخزن الدلالي (RAG)</h3>
+    <h3>المخزن الدلالي (RAG) - إضافة نص أو ملف واحد</h3>
+
     <label>ألصق نصًا هنا:</label>
     <textarea id="kb-text" rows="7" placeholder="ألصق نصًا أو ملخصًا أو مقالة..."></textarea>
+
     <div class="row">
       <input id="kb-title" placeholder="عنوان اختياري"/>
       <input type="file" id="kb-file" />
     </div>
+
     <button id="btn-add">إضافة للمخزن</button>
-    <div id="kb-status"></div>
+    <div id="kb-status" class="status-line"></div>
   </section>
 
+  <!-- قسم التغذية الشاملة (ZIP كامل) -->
+  <section class="panel">
+    <h3>إدخال حزمة معرفة كاملة (ZIP)</h3>
+
+    <p class="sub">
+      اختَر ملف ZIP كامل (مثلاً ai_knowledge_pack.zip).  
+      كل الملفات النصية داخله (.md .txt الخ...) سيتم تحليلها وتخزينها في قاعدة المعرفة الداخلية.
+      بعد الفهرسة، المساعد يقدر يستخدم هذه المعرفة في الإجابة.
+    </p>
+
+    <div class="row">
+      <input type="file" id="kb-zip" />
+    </div>
+
+    <button id="btn-zip">فهرسة ZIP بالكامل</button>
+
+    <div id="zip-status" class="status-line" style="margin-top:8px;"></div>
+  </section>
+
+  <!-- قسم المحادثة -->
   <section class="panel">
     <h3>المحادثة 💬</h3>
+
     <label class="chk">
       <input type="checkbox" id="use-search" checked />
-      <span>استخدم البحث الدلالي</span>
+      <span>استخدم البحث الدلالي (المعرفة الداخلية)</span>
     </label>
 
     <div id="chat"></div>
@@ -40,12 +65,13 @@
   </section>
 
   <footer>
-    <small>بُني باستخدام FastAPI + Gemini. التخزين في /tmp (غير دائم على الخطة المجانية).</small>
+    <small>بُني باستخدام FastAPI + Gemini. التخزين في /tmp أو data.db (قد لا يكون دائم على الخطة المجانية).</small>
   </footer>
 
 <script>
 const $ = (sel) => document.querySelector(sel);
 
+// دالة لعرض فقاعة دردشة
 function addBubble(text, who="bot"){
   const div = document.createElement("div");
   div.className = "bubble " + who;
@@ -54,6 +80,7 @@ function addBubble(text, who="bot"){
   $("#chat").scrollTop = $("#chat").scrollHeight;
 }
 
+// زر إضافة نص / ملف واحد إلى قاعدة المعرفة
 $("#btn-add").onclick = async () => {
   const text = $("#kb-text").value.trim();
   const title = $("#kb-title").value.trim();
@@ -64,13 +91,15 @@ $("#btn-add").onclick = async () => {
   if (text) fd.append("text", text);
   if (file) fd.append("file", file);
 
-  $("#kb-status").textContent = "جارِ الإضافة...";
+  $("#kb-status").textContent = "⏳ جارِ الإضافة...";
   try {
     const res = await fetch("/upload", { method: "POST", body: fd });
     const data = await res.json();
     if (data.ok) {
       $("#kb-status").textContent = `✔️ تم الحفظ: ${data.title} (${data.chars} حرف)`;
-      $("#kb-text").value = ""; $("#kb-title").value = ""; $("#kb-file").value = "";
+      $("#kb-text").value = "";
+      $("#kb-title").value = "";
+      $("#kb-file").value = "";
     } else {
       $("#kb-status").textContent = "❌ " + (data.error || "فشل غير معروف");
     }
@@ -79,19 +108,60 @@ $("#btn-add").onclick = async () => {
   }
 };
 
+// زر فهرسة ZIP كامل (تغذية ضخمة)
+$("#btn-zip").onclick = async () => {
+  const zipFile = $("#kb-zip").files[0];
+  if (!zipFile) {
+    $("#zip-status").textContent = "❌ اختر ملف ZIP أولاً";
+    return;
+  }
+
+  const fd = new FormData();
+  // مهم: يجب أن يكون الحقل اسمه "file" لأن الباك إند يستقبله بهذا الاسم
+  fd.append("file", zipFile);
+
+  $("#zip-status").textContent = "⏳ جاري الفهرسة...";
+  try {
+    const res = await fetch("/ingest-zip", {
+      method: "POST",
+      body: fd
+    });
+    const data = await res.json();
+
+    if (data.ok) {
+      // backend يرجع message مثل: "تم فهرسة 9 ملفًا و 120 مقطع."
+      $("#zip-status").textContent = "✔️ " + data.message;
+      $("#kb-zip").value = "";
+    } else {
+      $("#zip-status").textContent = "❌ " + (data.message || "فشل غير معروف");
+    }
+  } catch (e) {
+    $("#zip-status").textContent = "❌ مشكلة اتصال";
+  }
+};
+
+// إرسال رسالة للمساعد وقراءة الرد
 $("#send").onclick = async () => {
   const msg = $("#msg").value.trim();
   if (!msg) return;
+
+  // أضف رسالة المستخدم في الشات
   addBubble(msg, "user");
   $("#msg").value = "";
+
+  // أضف فقاعة انتظار الرد
   addBubble("… يجري التفكير …", "bot");
 
   try {
     const res = await fetch("/chat", {
       method: "POST",
       headers: {"Content-Type": "application/json"},
-      body: JSON.stringify({ message: msg, use_search: $("#use-search").checked })
+      body: JSON.stringify({
+        message: msg,
+        use_search: $("#use-search").checked
+      })
     });
+
     const data = await res.json();
     const last = document.querySelector("#chat .bubble.bot:last-child");
     last.textContent = data.reply || data.error || "❌ حدث خطأ في الخادم";
@@ -101,6 +171,7 @@ $("#send").onclick = async () => {
   }
 };
 
+// إرسال بالإنتر
 $("#msg").addEventListener("keydown", (e)=>{
   if (e.key === "Enter") $("#send").click();
 });
