@@ -50,7 +50,7 @@ langchain==0.0.350
 nltk==3.8.1
 spacy==3.7.2
 # تم إزالة الرابط المعطوب واستبداله بـ:
-ar-core-news-sm @ https://github.com/explosion/spacy-models/releases/download/ar_core_news_sm-3.7.0/ar_core_news_sm-3.7.0.tar.gz
+ar-core-news-sm @ https://github.com/explosion/spacy-models/releases/download/ar_core_news_sm-3.7.1/ar_core_news_sm-3.7.1.tar.gz
 
 # ========================
 # 📡 الشبكات والاتصالات
