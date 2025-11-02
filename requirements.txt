@@ -1,30 +1,38 @@
-# FastAPI framework
+# ========== FastAPI Framework ==========
 fastapi==0.115.0
 uvicorn==0.30.1
 
-# Machine Learning / NLP
+# ========== NLP / Machine Learning ==========
+# استخدم spaCy wheel الجاهز بدون blis من المصدر
 spacy==3.7.2
-ar-core-news-sm  # الموديل العربي سيتم تنزيله تلقائياً
+# نحتاج numpy و cython لتسريع spaCy
+numpy==1.26.4
+cython==3.0.10
 
-# Summarization & Embeddings
+# الموديل العربي يتم تحميله لاحقًا من داخل التطبيق:
+# python -m spacy download ar_core_news_sm
+
+# ========== Transformers & Embeddings ==========
 transformers==4.43.1
 sentence-transformers==3.0.1
-numpy==1.26.4
 scikit-learn==1.5.1
 
-# Web Requests & Parsing
+# ========== Web Requests & Parsing ==========
 requests==2.32.3
 beautifulsoup4==4.12.3
 
-# Database & File handling
+# ========== Database & File Handling ==========
 sqlalchemy==2.0.31
 pandas==2.2.2
 
-# Utils
+# ========== Utilities ==========
 python-multipart==0.0.9
 tqdm==4.66.5
 pydantic==2.9.1
 jinja2==3.1.4
-
-# Optional (for async features)
 aiohttp==3.9.5
+
+# ========== Compatibility Fixes ==========
+# نثبت wheel و setuptools لتجنب أخطاء build أثناء النشر
+setuptools==75.2.0
+wheel==0.44.0
