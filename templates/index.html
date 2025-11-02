@@ -1,180 +1,477 @@
-<!doctype html>
+<!DOCTYPE html>
 <html lang="ar" dir="rtl">
 <head>
-  <meta charset="utf-8"/>
-  <meta name="viewport" content="width=device-width,initial-scale=1"/>
-  <title>Bassam Chat AI (Gemini)</title>
-  <link rel="stylesheet" href="/static/style.css"/>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>باسَم - المساعد الذكي</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            padding: 20px;
+        }
+
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            background: white;
+            border-radius: 20px;
+            box-shadow: 0 20px 40px rgba(0,0,0,0.1);
+            overflow: hidden;
+        }
+
+        .header {
+            background: linear-gradient(135deg, #2c3e50 0%, #3498db 100%);
+            color: white;
+            padding: 40px;
+            text-align: center;
+        }
+
+        .header h1 {
+            font-size: 2.5em;
+            margin-bottom: 10px;
+        }
+
+        .header p {
+            font-size: 1.2em;
+            opacity: 0.9;
+        }
+
+        .main-content {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 30px;
+            padding: 40px;
+        }
+
+        @media (max-width: 768px) {
+            .main-content {
+                grid-template-columns: 1fr;
+            }
+        }
+
+        .card {
+            background: #f8f9fa;
+            border-radius: 15px;
+            padding: 30px;
+            border: 1px solid #e9ecef;
+            transition: transform 0.3s ease, box-shadow 0.3s ease;
+        }
+
+        .card:hover {
+            transform: translateY(-5px);
+            box-shadow: 0 15px 30px rgba(0,0,0,0.1);
+        }
+
+        .card h2 {
+            color: #2c3e50;
+            margin-bottom: 20px;
+            font-size: 1.5em;
+            border-bottom: 3px solid #3498db;
+            padding-bottom: 10px;
+        }
+
+        .feature-list {
+            list-style: none;
+        }
+
+        .feature-list li {
+            padding: 12px 0;
+            border-bottom: 1px solid #e9ecef;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .feature-list li:last-child {
+            border-bottom: none;
+        }
+
+        .feature-list li::before {
+            content: "✅";
+            font-size: 1.2em;
+        }
+
+        .api-endpoints {
+            background: #e8f4f8;
+        }
+
+        .endpoint {
+            background: white;
+            margin: 15px 0;
+            padding: 15px;
+            border-radius: 10px;
+            border-right: 4px solid #3498db;
+        }
+
+        .endpoint .method {
+            display: inline-block;
+            background: #3498db;
+            color: white;
+            padding: 4px 12px;
+            border-radius: 20px;
+            font-size: 0.9em;
+            margin-left: 10px;
+        }
+
+        .endpoint.get .method { background: #27ae60; }
+        .endpoint.post .method { background: #e67e22; }
+        .endpoint.put .method { background: #9b59b6; }
+        .endpoint.delete .method { background: #e74c3c; }
+
+        .chat-interface {
+            background: #fff3cd;
+        }
+
+        .chat-messages {
+            height: 200px;
+            overflow-y: auto;
+            border: 1px solid #ffeaa7;
+            border-radius: 10px;
+            padding: 15px;
+            margin-bottom: 15px;
+            background: white;
+        }
+
+        .message {
+            margin: 10px 0;
+            padding: 10px 15px;
+            border-radius: 15px;
+            max-width: 80%;
+        }
+
+        .message.user {
+            background: #3498db;
+            color: white;
+            margin-right: auto;
+            border-bottom-right-radius: 5px;
+        }
+
+        .message.ai {
+            background: #e9ecef;
+            color: #2c3e50;
+            margin-left: auto;
+            border-bottom-left-radius: 5px;
+        }
+
+        .chat-input {
+            display: flex;
+            gap: 10px;
+        }
+
+        .chat-input input {
+            flex: 1;
+            padding: 12px;
+            border: 2px solid #bdc3c7;
+            border-radius: 25px;
+            outline: none;
+            transition: border-color 0.3s ease;
+        }
+
+        .chat-input input:focus {
+            border-color: #3498db;
+        }
+
+        .chat-input button {
+            background: #27ae60;
+            color: white;
+            border: none;
+            padding: 12px 25px;
+            border-radius: 25px;
+            cursor: pointer;
+            transition: background 0.3s ease;
+        }
+
+        .chat-input button:hover {
+            background: #219a52;
+        }
+
+        .system-info {
+            background: #e8f4f8;
+            padding: 20px;
+            border-radius: 10px;
+            margin-top: 20px;
+        }
+
+        .info-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 15px;
+            margin-top: 15px;
+        }
+
+        .info-item {
+            background: white;
+            padding: 15px;
+            border-radius: 10px;
+            text-align: center;
+            border: 1px solid #bdc3c7;
+        }
+
+        .info-item .value {
+            font-size: 1.5em;
+            font-weight: bold;
+            color: #2c3e50;
+            margin-top: 5px;
+        }
+
+        .footer {
+            background: #2c3e50;
+            color: white;
+            text-align: center;
+            padding: 20px;
+            margin-top: 40px;
+        }
+
+        .quick-actions {
+            display: flex;
+            gap: 10px;
+            margin-top: 20px;
+            flex-wrap: wrap;
+        }
+
+        .action-btn {
+            background: #3498db;
+            color: white;
+            border: none;
+            padding: 10px 20px;
+            border-radius: 25px;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            text-decoration: none;
+            display: inline-block;
+        }
+
+        .action-btn:hover {
+            background: #2980b9;
+            transform: translateY(-2px);
+        }
+
+        .flask-btn { background: #e74c3c; }
+        .fastapi-btn { background: #009688; }
+        .shell-btn { background: #9b59b6; }
+        .docs-btn { background: #f39c12; }
+    </style>
 </head>
 <body>
-  <header>
-    <h1>Bassam Chat AI (Gemini) 🤖</h1>
-    <p class="sub">يدعم البحث الدلالي من مخزن المعرفة + دردشة عربية فورية.</p>
-  </header>
+    <div class="container">
+        <header class="header">
+            <h1>🧠 باسَم - المساعد الذكي</h1>
+            <p>نظام متكامل للبرمجة، الذكاء الاصطناعي، وإدارة المشاريع</p>
+        </header>
 
-  <!-- قسم التغذية اليدوية (نص/ملف واحد) -->
-  <section class="panel">
-    <h3>المخزن الدلالي (RAG) - إضافة نص أو ملف واحد</h3>
+        <div class="main-content">
+            <!-- بطاقة المميزات -->
+            <div class="card">
+                <h2>🚀 المميزات الرئيسية</h2>
+                <ul class="feature-list">
+                    <li>محادثة ذكية مع الذكاء الاصطناعي</li>
+                    <li>وضع Shell لإنشاء الأكواد تلقائياً</li>
+                    <li>تطبيقات ويب جاهزة (Flask, FastAPI)</li>
+                    <li>إدارة المشاريع البرمجية</li>
+                    <li>واجهات REST API متكاملة</li>
+                    <li>قاعدة بيانات وتخزين مركزي</li>
+                    <li>تحليل النصوص والنيّة</li>
+                    <li>نظام تسجيل وإحصائيات</li>
+                </ul>
 
-    <label>ألصق نصًا هنا:</label>
-    <textarea id="kb-text" rows="7" placeholder="ألصق نصًا أو ملخصًا أو مقالة..."></textarea>
+                <div class="quick-actions">
+                    <button class="action-btn shell-btn" onclick="startShell()">🛠️ تشغيل Shell</button>
+                    <a href="/api/chat" class="action-btn">💬 واجهة المحادثة</a>
+                    <a href="/health" class="action-btn">❤️ فحص الصحة</a>
+                    <a href="/api/system-info" class="action-btn docs-btn">📊 معلومات النظام</a>
+                </div>
+            </div>
 
-    <div class="row">
-      <input id="kb-title" placeholder="عنوان اختياري"/>
-      <input type="file" id="kb-file" />
+            <!-- بطاقة واجهات API -->
+            <div class="card api-endpoints">
+                <h2>🔗 واجهات API المتاحة</h2>
+                
+                <div class="endpoint get">
+                    <span class="method">GET</span>
+                    <strong>/api/chat</strong> - محادثة ذكية
+                </div>
+
+                <div class="endpoint post">
+                    <span class="method">POST</span>
+                    <strong>/api/chat</strong> - إرسال رسالة
+                </div>
+
+                <div class="endpoint get">
+                    <span class="method">GET</span>
+                    <strong>/api/users</strong> - قائمة المستخدمين
+                </div>
+
+                <div class="endpoint get">
+                    <span class="method">GET</span>
+                    <strong>/api/conversations</strong> - سجل المحادثات
+                </div>
+
+                <div class="endpoint get">
+                    <span class="method">GET</span>
+                    <strong>/api/system-info</strong> - معلومات النظام
+                </div>
+
+                <div class="endpoint get">
+                    <span class="method">GET</span>
+                    <strong>/health</strong> - فحص صحة التطبيق
+                </div>
+
+                <div class="quick-actions">
+                    <a href="http://localhost:5000" class="action-btn flask-btn">🌐 تطبيق Flask</a>
+                    <a href="http://localhost:8000/docs" class="action-btn fastapi-btn">⚡ توثيق FastAPI</a>
+                </div>
+            </div>
+
+            <!-- بطاقة المحادثة -->
+            <div class="card chat-interface">
+                <h2>💬 محادثة مباشرة</h2>
+                <div class="chat-messages" id="chatMessages">
+                    <div class="message ai">
+                        مرحباً! أنا باسَم المساعد الذكي. كيف يمكنني مساعدتك اليوم؟
+                    </div>
+                </div>
+                <div class="chat-input">
+                    <input type="text" id="messageInput" placeholder="اكتب رسالتك هنا..." onkeypress="handleKeyPress(event)">
+                    <button onclick="sendMessage()">إرسال</button>
+                </div>
+            </div>
+
+            <!-- بطاقة معلومات النظام -->
+            <div class="card">
+                <h2>📊 حالة النظام</h2>
+                <div class="system-info">
+                    <div class="info-grid">
+                        <div class="info-item">
+                            <div>التطبيق</div>
+                            <div class="value" id="appName">Bassam AI</div>
+                        </div>
+                        <div class="info-item">
+                            <div>الإصدار</div>
+                            <div class="value" id="appVersion">1.0.0</div>
+                        </div>
+                        <div class="info-item">
+                            <div>الحالة</div>
+                            <div class="value" style="color: #27ae60;" id="appStatus">نشط</div>
+                        </div>
+                        <div class="info-item">
+                            <div>الطلبات</div>
+                            <div class="value" id="requestCount">0</div>
+                        </div>
+                    </div>
+                </div>
+                
+                <div class="quick-actions" style="margin-top: 20px;">
+                    <button class="action-btn" onclick="refreshStats()">🔄 تحديث الإحصائيات</button>
+                    <button class="action-btn" onclick="clearChat()">🗑️ مسح المحادثة</button>
+                </div>
+            </div>
+        </div>
+
+        <footer class="footer">
+            <p>© 2024 باسَم - النظام الذكي. تم التطوير باستخدام ❤️</p>
+            <p>Flask | FastAPI | الذكاء الاصطناعي | Python</p>
+        </footer>
     </div>
 
-    <button id="btn-add">إضافة للمخزن</button>
-    <div id="kb-status" class="status-line"></div>
-  </section>
+    <script>
+        // متغيرات التطبيق
+        let messageCount = 0;
 
-  <!-- قسم التغذية الشاملة (ZIP كامل) -->
-  <section class="panel">
-    <h3>إدخال حزمة معرفة كاملة (ZIP)</h3>
+        // إرسال رسالة
+        function sendMessage() {
+            const input = document.getElementById('messageInput');
+            const message = input.value.trim();
+            
+            if (!message) return;
 
-    <p class="sub">
-      اختَر ملف ZIP كامل (مثلاً ai_knowledge_pack.zip).  
-      كل الملفات النصية داخله (.md .txt الخ...) سيتم تحليلها وتخزينها في قاعدة المعرفة الداخلية.
-      بعد الفهرسة، المساعد يقدر يستخدم هذه المعرفة في الإجابة.
-    </p>
+            // إضافة رسالة المستخدم
+            addMessage(message, 'user');
+            input.value = '';
 
-    <div class="row">
-      <input type="file" id="kb-zip" />
-    </div>
+            // محاكاة رد الذكاء الاصطناعي
+            setTimeout(() => {
+                const responses = [
+                    "هذا مثير للاهتمام! يمكنني مساعدتك في البرمجة أو إنشاء مشاريع جديدة.",
+                    "رائع! هل تريد إنشاء تطبيق ويب أو سكربت برمجي؟",
+                    "أفهم طلبك. جرب وضع Shell لإنشاء الأكواد تلقائياً.",
+                    "يمكنني مساعدتك في Flask, FastAPI, أو إنشاء مشاريع Django كاملة.",
+                    "شكراً لرسالتك! كيف يمكنني خدمتك اليوم؟"
+                ];
+                const randomResponse = responses[Math.floor(Math.random() * responses.length)];
+                addMessage(randomResponse, 'ai');
+            }, 1000);
+        }
 
-    <button id="btn-zip">فهرسة ZIP بالكامل</button>
+        // إضافة رسالة للشات
+        function addMessage(text, sender) {
+            const chatMessages = document.getElementById('chatMessages');
+            const messageDiv = document.createElement('div');
+            messageDiv.className = `message ${sender}`;
+            messageDiv.textContent = text;
+            chatMessages.appendChild(messageDiv);
+            chatMessages.scrollTop = chatMessages.scrollHeight;
+            messageCount++;
+            updateStats();
+        }
 
-    <div id="zip-status" class="status-line" style="margin-top:8px;"></div>
-  </section>
+        // التعامل مع ضغط الزر
+        function handleKeyPress(event) {
+            if (event.key === 'Enter') {
+                sendMessage();
+            }
+        }
 
-  <!-- قسم المحادثة -->
-  <section class="panel">
-    <h3>المحادثة 💬</h3>
+        // تشغيل Shell (محاكاة)
+        function startShell() {
+            addMessage('🚀 بدء تشغيل Shell الذكي...', 'ai');
+            setTimeout(() => {
+                addMessage('يمكنك الآن استخدام الأوامر مثل: create, build, run, install', 'ai');
+            }, 500);
+        }
 
-    <label class="chk">
-      <input type="checkbox" id="use-search" checked />
-      <span>استخدم البحث الدلالي (المعرفة الداخلية)</span>
-    </label>
+        // تحديث الإحصائيات
+        function updateStats() {
+            document.getElementById('requestCount').textContent = messageCount;
+        }
 
-    <div id="chat"></div>
+        // تحديث الإحصائيات من السيرفر
+        function refreshStats() {
+            fetch('/api/system-info')
+                .then(response => response.json())
+                .then(data => {
+                    document.getElementById('appName').textContent = data.app_name || 'Bassam AI';
+                    document.getElementById('appVersion').textContent = data.version || '1.0.0';
+                    document.getElementById('requestCount').textContent = data.total_requests || messageCount;
+                })
+                .catch(error => {
+                    console.log('استخدم الإحصائيات المحلية');
+                    updateStats();
+                });
+        }
 
-    <div class="row">
-      <input id="msg" placeholder="اكتب سؤالك هنا..." />
-      <button id="send">إرسال</button>
-    </div>
-  </section>
+        // مسح المحادثة
+        function clearChat() {
+            document.getElementById('chatMessages').innerHTML = 
+                '<div class="message ai">مرحباً! أنا باسَم المساعد الذكي. كيف يمكنني مساعدتك اليوم؟</div>';
+            messageCount = 0;
+            updateStats();
+        }
 
-  <footer>
-    <small>بُني باستخدام FastAPI + Gemini. التخزين في /tmp أو data.db (قد لا يكون دائم على الخطة المجانية).</small>
-  </footer>
-
-<script>
-const $ = (sel) => document.querySelector(sel);
-
-// دالة لعرض فقاعة دردشة
-function addBubble(text, who="bot"){
-  const div = document.createElement("div");
-  div.className = "bubble " + who;
-  div.textContent = text;
-  $("#chat").appendChild(div);
-  $("#chat").scrollTop = $("#chat").scrollHeight;
-}
-
-// زر إضافة نص / ملف واحد إلى قاعدة المعرفة
-$("#btn-add").onclick = async () => {
-  const text = $("#kb-text").value.trim();
-  const title = $("#kb-title").value.trim();
-  const file = $("#kb-file").files[0];
-
-  const fd = new FormData();
-  if (title) fd.append("title", title);
-  if (text) fd.append("text", text);
-  if (file) fd.append("file", file);
-
-  $("#kb-status").textContent = "⏳ جارِ الإضافة...";
-  try {
-    const res = await fetch("/upload", { method: "POST", body: fd });
-    const data = await res.json();
-    if (data.ok) {
-      $("#kb-status").textContent = `✔️ تم الحفظ: ${data.title} (${data.chars} حرف)`;
-      $("#kb-text").value = "";
-      $("#kb-title").value = "";
-      $("#kb-file").value = "";
-    } else {
-      $("#kb-status").textContent = "❌ " + (data.error || "فشل غير معروف");
-    }
-  } catch (e) {
-    $("#kb-status").textContent = "❌ خطأ في الشبكة";
-  }
-};
-
-// زر فهرسة ZIP كامل (تغذية ضخمة)
-$("#btn-zip").onclick = async () => {
-  const zipFile = $("#kb-zip").files[0];
-  if (!zipFile) {
-    $("#zip-status").textContent = "❌ اختر ملف ZIP أولاً";
-    return;
-  }
-
-  const fd = new FormData();
-  // مهم: يجب أن يكون الحقل اسمه "file" لأن الباك إند يستقبله بهذا الاسم
-  fd.append("file", zipFile);
-
-  $("#zip-status").textContent = "⏳ جاري الفهرسة...";
-  try {
-    const res = await fetch("/ingest-zip", {
-      method: "POST",
-      body: fd
-    });
-    const data = await res.json();
-
-    if (data.ok) {
-      // backend يرجع message مثل: "تم فهرسة 9 ملفًا و 120 مقطع."
-      $("#zip-status").textContent = "✔️ " + data.message;
-      $("#kb-zip").value = "";
-    } else {
-      $("#zip-status").textContent = "❌ " + (data.message || "فشل غير معروف");
-    }
-  } catch (e) {
-    $("#zip-status").textContent = "❌ مشكلة اتصال";
-  }
-};
-
-// إرسال رسالة للمساعد وقراءة الرد
-$("#send").onclick = async () => {
-  const msg = $("#msg").value.trim();
-  if (!msg) return;
-
-  // أضف رسالة المستخدم في الشات
-  addBubble(msg, "user");
-  $("#msg").value = "";
-
-  // أضف فقاعة انتظار الرد
-  addBubble("… يجري التفكير …", "bot");
-
-  try {
-    const res = await fetch("/chat", {
-      method: "POST",
-      headers: {"Content-Type": "application/json"},
-      body: JSON.stringify({
-        message: msg,
-        use_search: $("#use-search").checked
-      })
-    });
-
-    const data = await res.json();
-    const last = document.querySelector("#chat .bubble.bot:last-child");
-    last.textContent = data.reply || data.error || "❌ حدث خطأ في الخادم";
-  } catch (e) {
-    const last = document.querySelector("#chat .bubble.bot:last-child");
-    last.textContent = "❌ مشكلة اتصال";
-  }
-};
-
-// إرسال بالإنتر
-$("#msg").addEventListener("keydown", (e)=>{
-  if (e.key === "Enter") $("#send").click();
-});
-</script>
+        // تحديث الإحصائيات عند التحميل
+        document.addEventListener('DOMContentLoaded', function() {
+            refreshStats();
+            
+            // تحديث الوقت كل 30 ثانية
+            setInterval(refreshStats, 30000);
+        });
+    </script>
 </body>
 </html>
