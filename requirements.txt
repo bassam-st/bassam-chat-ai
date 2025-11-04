@@ -10,7 +10,6 @@ wheel==0.44.0
 pip==25.0.1
 
 # ========= NLP & Transformers =========
-# ملاحظة: spaCy يُثبت في Build Command (خارج الملف)
 transformers==4.43.1
 sentence-transformers==3.0.1
 scikit-learn==1.4.2
